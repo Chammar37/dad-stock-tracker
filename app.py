@@ -796,7 +796,3 @@ elif page == "Stock Charts":
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-# Footer
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Stock Tracker v1.0**")
-st.sidebar.markdown("Built with Streamlit")
