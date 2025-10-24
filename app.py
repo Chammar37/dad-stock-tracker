@@ -69,10 +69,19 @@ def format_currency(value):
     return f"${value:,.2f}"
 
 def format_number(value):
-    """Format number values."""
+    """Format number values with appropriate decimal places."""
     if pd.isna(value):
         return "0"
-    return f"{value:,.0f}"
+    
+    # If the value is less than 1, show up to 4 decimal places
+    if abs(value) < 1:
+        return f"{value:.4f}".rstrip('0').rstrip('.')
+    # If the value is less than 10, show 2 decimal places
+    elif abs(value) < 10:
+        return f"{value:.2f}".rstrip('0').rstrip('.')
+    # For larger values, show no decimal places
+    else:
+        return f"{value:,.0f}"
 
 # Chart Helper Functions
 def get_common_chart_layout(height=500):
@@ -186,6 +195,44 @@ def create_volume_chart(data, symbol, timeframe):
     fig.update_layout(layout)
     return fig
 
+# Helper function to get available stocks for sell/transfer
+def get_available_stocks_for_sell(account: str = None) -> list:
+    """
+    Get stocks available for selling/transferring from consolidated view.
+    Returns list of tuples: (symbol, display_name, quantity)
+    """
+    try:
+        df = data_manager.read_consolidated()
+        if df.empty:
+            return []
+        
+        # Filter by account if specified
+        if account:
+            df = df[df['Account'] == account]
+        
+        # Only include stocks with quantity > 0 (use small epsilon for floating point precision)
+        df = df[df['Quantity'] > 0.0001]
+        
+        available_stocks = []
+        for _, row in df.iterrows():
+            symbol = row['StockSymbol']
+            name = row['StockName']
+            quantity = row['Quantity']
+            account_name = row['Account']
+            
+            # Format quantity display based on size
+            if quantity < 1:
+                qty_display = f"{quantity:.3f}"
+            else:
+                qty_display = f"{quantity:.0f}"
+            
+            display_name = f"{symbol} - {name} ({qty_display} shares in {account_name})"
+            available_stocks.append((symbol, display_name, quantity))
+        
+        return available_stocks
+    except:
+        return []
+
 # Page 1: Consolidated Record (Dashboard)
 if page == "Consolidated Record":
     st.title("📊 Consolidated Record")
@@ -267,6 +314,10 @@ elif page == "Trade Entry":
     # Get existing accounts for dropdown
     existing_accounts = data_manager.get_accounts()
     
+    # Trade type selection (outside form for immediate updates)
+    trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
+                            format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
+    
     with st.form("trade_form"):
         st.subheader("Trade Details")
         
@@ -279,29 +330,103 @@ elif page == "Trade Entry":
             else:
                 account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
             
-            stock_name = st.text_input("Stock Name", placeholder="e.g., Apple Inc.")
-            stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
+            # Initialize variables
+            stock_symbol = ""
+            stock_name = ""
+            max_quantity = None
+            
+            # Conditional stock input based on trade type
+            if trade_type in ["S", "T"]:  # Sell or Transfer
+                # Get available stocks for this account
+                available_stocks = get_available_stocks_for_sell(account if account else None)
+                
+                if available_stocks:
+                    # Create options for dropdown
+                    stock_options = [f"{display}" for _, display, _ in available_stocks]
+                    stock_options.insert(0, "Select a stock to sell/transfer...")
+                    
+                    selected_stock_display = st.selectbox(
+                        "Select Stock to Sell/Transfer",
+                        stock_options,
+                        key="sell_stock_select"
+                    )
+                    
+                    if selected_stock_display != "Select a stock to sell/transfer...":
+                        # Extract symbol and name from selection
+                        for symbol, display, quantity in available_stocks:
+                            if display == selected_stock_display:
+                                stock_symbol = symbol
+                                # Extract stock name from display
+                                stock_name = display.split(" - ")[1].split(" (")[0]
+                                max_quantity = float(quantity)  # Ensure it's a float
+                                break
+                        
+                        # Show available quantity
+                        st.info(f"Available: {max_quantity:.0f} shares")
+                    else:
+                        stock_symbol = ""
+                        stock_name = ""
+                        max_quantity = 0.0  # Ensure it's a float
+                else:
+                    st.warning("No stocks available for selling/transferring in this account.")
+                    stock_symbol = ""
+                    stock_name = ""
+                    max_quantity = 0.0  # Ensure it's a float
+            else:  # Buy
+                stock_name = st.text_input("Stock Name", placeholder="e.g., Apple Inc.")
+                stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
+                max_quantity = None  # No limit for buying
+            
             trade_date = st.date_input("Date of Trade", value=date.today())
         
         with col2:
-            trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
-                                    format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
-            shares_traded = st.number_input("Shares Traded", min_value=0.0, step=0.01, format="%.2f")
+            # Shares traded with conditional max value
+            if trade_type in ["S", "T"] and max_quantity is not None and max_quantity > 0:
+                # Determine appropriate step size based on max quantity
+                if max_quantity < 1:
+                    step_size = 0.001  # For very small quantities like Bitcoin
+                elif max_quantity < 10:
+                    step_size = 0.01   # For small quantities
+                else:
+                    step_size = 0.01   # For larger quantities
+                
+                shares_traded = st.number_input(
+                    "Shares Traded", 
+                    min_value=0.0, 
+                    max_value=float(max_quantity),  # Ensure it's a float
+                    step=step_size, 
+                    format="%.3f" if max_quantity < 1 else "%.2f",
+                    help=f"Maximum: {max_quantity:.3f} shares" if max_quantity < 1 else f"Maximum: {max_quantity:.0f} shares"
+                )
+            else:
+                shares_traded = st.number_input("Shares Traded", min_value=0.0, step=0.01, format="%.2f")
+            
             price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
             commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=0.0)
         
         submitted = st.form_submit_button("Process Trade", type="primary")
         
         if submitted:
-            # Validation
+            # Ensure shares_traded is a proper float
+            try:
+                shares_traded = float(shares_traded)
+            except (ValueError, TypeError):
+                shares_traded = 0.0
+            
+            # Validation with better error handling
             if not account.strip():
                 st.error("Please enter an account name.")
-            elif not stock_name.strip():
-                st.error("Please enter a stock name.")
-            elif not stock_symbol.strip():
-                st.error("Please enter a stock symbol.")
-            elif shares_traded <= 0:
-                st.error("Shares traded must be greater than 0.")
+            elif trade_type in ["S", "T"] and (not stock_symbol.strip() or stock_symbol == ""):
+                st.error("Please select a stock to sell/transfer.")
+            elif trade_type == "B" and (not stock_name.strip() or not stock_symbol.strip()):
+                st.error("Please enter both stock name and symbol for buying.")
+            elif shares_traded <= 0 or shares_traded < 0.0001:  # Handle very small decimal values
+                st.error(f"Shares traded must be greater than 0. You entered: {shares_traded}")
+            elif trade_type in ["S", "T"] and max_quantity is not None and shares_traded > max_quantity + 0.0001:  # Add small epsilon for precision
+                if max_quantity < 1:
+                    st.error(f"Cannot sell/transfer more than {max_quantity:.3f} shares. You tried to sell: {shares_traded:.3f} shares.")
+                else:
+                    st.error(f"Cannot sell/transfer more than {max_quantity:.0f} shares. You tried to sell: {shares_traded:.0f} shares.")
             elif price_per_share <= 0:
                 st.error("Price per share must be greater than 0.")
             else:
@@ -323,7 +448,10 @@ elif page == "Trade Entry":
                 
                 if success:
                     st.success(message)
-                    st.rerun()  # Refresh the page to show updated data
+                    st.info("Redirecting to Consolidated Record to view updated holdings...")
+                    # Set session state to redirect to Consolidated Record
+                    st.session_state.page = "Consolidated Record"
+                    st.rerun()
                 else:
                     st.error(message)
 
@@ -389,7 +517,10 @@ elif page == "Pre-populate Database":
                 
                 if success:
                     st.success(message)
-                    st.rerun()  # Refresh the page
+                    st.info("Redirecting to Consolidated Record to view updated holdings...")
+                    # Set session state to redirect to Consolidated Record
+                    st.session_state.page = "Consolidated Record"
+                    st.rerun()
                 else:
                     st.error(message)
 
