@@ -1,14 +1,38 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import sys
 import os
+import yfinance as yf
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 # Add the utils directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 
 from utils.data_manager import DataManager
 from utils.calculations import TradeCalculator
+
+# Chart Theme Configuration
+CHART_COLORS = {
+    'primary': '#4A90E2',
+    'primary_transparent': 'rgba(74, 144, 226, 0.1)',
+    'primary_semi': 'rgba(74, 144, 226, 0.6)',
+    'primary_dark': 'rgba(74, 144, 226, 0.8)',
+    'title': '#2C3E50',
+    'text': '#7F8C8D',
+    'grid': 'rgba(127, 140, 141, 0.2)'
+}
+
+CHART_FONTS = {
+    'title_large': dict(size=20, color=CHART_COLORS['title']),
+    'title_medium': dict(size=16, color=CHART_COLORS['title']),
+    'axis_title': dict(size=14, color=CHART_COLORS['text']),
+    'axis_title_small': dict(size=12, color=CHART_COLORS['text']),
+    'tick_large': dict(size=12, color=CHART_COLORS['text']),
+    'tick_small': dict(size=10, color=CHART_COLORS['text'])
+}
 
 # Page configuration
 st.set_page_config(
@@ -34,7 +58,7 @@ calculator = get_trade_calculator()
 st.sidebar.title("📈 Stock Tracker")
 page = st.sidebar.selectbox(
     "Navigate",
-    ["Consolidated Record", "Trade Entry", "Pre-populate Database", "Trade History"]
+    ["Consolidated Record", "Trade Entry", "Pre-populate Database", "Trade History", "Stock Charts"]
 )
 
 # Helper functions
@@ -49,6 +73,118 @@ def format_number(value):
     if pd.isna(value):
         return "0"
     return f"{value:,.0f}"
+
+# Chart Helper Functions
+def get_common_chart_layout(height=500):
+    """Returns common layout settings for charts."""
+    return {
+        'plot_bgcolor': 'rgba(0,0,0,0)',
+        'paper_bgcolor': 'rgba(0,0,0,0)',
+        'hovermode': 'x unified',
+        'height': height
+    }
+
+def get_axis_style(title_text, is_large=True):
+    """Returns styled axis configuration."""
+    return {
+        'title': dict(
+            text=title_text, 
+            font=CHART_FONTS['axis_title'] if is_large else CHART_FONTS['axis_title_small']
+        ),
+        'tickfont': CHART_FONTS['tick_large'] if is_large else CHART_FONTS['tick_small'],
+        'gridcolor': CHART_COLORS['grid'],
+        'showgrid': True,
+        'zeroline': False
+    }
+
+def create_price_chart(data, symbol, stock_name, timeframe):
+    """Creates a styled price line chart."""
+    fig = go.Figure()
+    
+    # Main price line
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['Close'],
+        mode='lines',
+        name=symbol,
+        line=dict(
+            color=CHART_COLORS['primary'],
+            width=3,
+            shape='spline',
+            smoothing=0.3
+        ),
+        hovertemplate='<b>%{x}</b><br>Price: $%{y:.2f}<extra></extra>'
+    ))
+    
+    # Fill under line
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['Close'],
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo='skip',
+        fill='tonexty',
+        fillcolor=CHART_COLORS['primary_transparent']
+    ))
+    
+    # Apply layout
+    layout = get_common_chart_layout(height=500)
+    layout.update({
+        'title': dict(
+            text=f"{symbol} - {stock_name} ({timeframe})",
+            font=CHART_FONTS['title_large'],
+            x=0.5,
+            xanchor='center'
+        ),
+        'xaxis': get_axis_style("Date", is_large=True),
+        'yaxis': {**get_axis_style("Price ($)", is_large=True), 'tickformat': '$.2f'},
+        'margin': dict(l=50, r=50, t=80, b=50),
+        'showlegend': True,
+        'legend': dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=CHART_FONTS['tick_large']
+        )
+    })
+    
+    fig.update_layout(layout)
+    return fig
+
+def create_volume_chart(data, symbol, timeframe):
+    """Creates a styled volume bar chart."""
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        x=data.index,
+        y=data['Volume'],
+        name="Volume",
+        marker_color=CHART_COLORS['primary_semi'],
+        marker_line_color=CHART_COLORS['primary_dark'],
+        marker_line_width=1,
+        hovertemplate='<b>%{x}</b><br>Volume: %{y:,}<extra></extra>'
+    ))
+    
+    # Apply layout
+    layout = get_common_chart_layout(height=300)
+    layout.update({
+        'title': dict(
+            text=f"{symbol} Volume ({timeframe})",
+            font=CHART_FONTS['title_medium'],
+            x=0.5,
+            xanchor='center'
+        ),
+        'xaxis': get_axis_style("Date", is_large=False),
+        'yaxis': get_axis_style("Volume", is_large=False),
+        'margin': dict(l=50, r=50, t=60, b=50),
+        'showlegend': False
+    })
+    
+    fig.update_layout(layout)
+    return fig
 
 # Page 1: Consolidated Record (Dashboard)
 if page == "Consolidated Record":
@@ -337,6 +473,197 @@ elif page == "Trade History":
                 st.metric("Total Commission", format_currency(total_commission))
         else:
             st.info("No trades match the selected filters.")
+
+# Page 5: Stock Charts
+elif page == "Stock Charts":
+    st.title("📈 Stock Charts")
+    st.markdown("Live stock charts for your holdings")
+    
+    # Load consolidated data
+    df = data_manager.read_consolidated()
+    
+    if df.empty:
+        st.info("No holdings found. Add some stocks to your portfolio to see charts.")
+    else:
+        # Get unique stock symbols from holdings
+        symbols = df['StockSymbol'].unique().tolist()
+        
+        # Timeframe selection
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            timeframe = st.selectbox(
+                "Timeframe",
+                ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
+                index=2  # Default to 1mo
+            )
+        
+        with col2:
+            selected_symbol = st.selectbox(
+                "Select Stock",
+                symbols,
+                format_func=lambda x: f"{x} - {df[df['StockSymbol']==x]['StockName'].iloc[0]}"
+            )
+        
+        # Fetch stock data
+        @st.cache_data(ttl=300)  # Cache for 5 minutes
+        def get_stock_data(symbol, period):
+            try:
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period=period)
+                
+                if data.empty:
+                    st.warning(f"No data available for {symbol} with period {period}")
+                    return None, None
+                
+                info = ticker.info
+                return data, info
+            except Exception as e:
+                st.error(f"Error fetching data for {symbol}: {e}")
+                return None, None
+        
+        with st.spinner(f"Loading {selected_symbol} data..."):
+            data, info = get_stock_data(selected_symbol, timeframe)
+        
+        if data is not None and not data.empty:
+            # Get current price and change
+            current_price = data['Close'].iloc[-1]
+            prev_close = data['Close'].iloc[-2] if len(data) > 1 else current_price
+            price_change = current_price - prev_close
+            price_change_pct = (price_change / prev_close) * 100
+            
+            # Display current price info
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Current Price", f"${current_price:.2f}")
+            
+            with col2:
+                st.metric("Change", f"${price_change:.2f}", f"{price_change_pct:.2f}%")
+            
+            with col3:
+                # Get holding info
+                holding = df[df['StockSymbol'] == selected_symbol].iloc[0]
+                st.metric("Your Shares", f"{holding['Quantity']:.0f}")
+            
+            with col4:
+                total_value = holding['Quantity'] * current_price
+                st.metric("Total Value", f"${total_value:,.2f}")
+            
+            # Create charts using helper functions
+            stock_name = df[df['StockSymbol']==selected_symbol]['StockName'].iloc[0]
+            fig = create_price_chart(data, selected_symbol, stock_name, timeframe)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Volume chart
+            if 'Volume' in data.columns:
+                fig_volume = create_volume_chart(data, selected_symbol, timeframe)
+                st.plotly_chart(fig_volume, use_container_width=True)
+            
+            # Portfolio performance section
+            st.subheader("Portfolio Performance")
+            
+            # Calculate portfolio performance for this stock
+            holding = df[df['StockSymbol'] == selected_symbol].iloc[0]
+            avg_cost = holding['AveragePricePerShare']
+            shares = holding['Quantity']
+            cost_basis = shares * avg_cost
+            current_value = shares * current_price
+            unrealized_gain = current_value - cost_basis
+            unrealized_gain_pct = (unrealized_gain / cost_basis) * 100
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Cost Basis", f"${cost_basis:,.2f}")
+            
+            with col2:
+                st.metric("Current Value", f"${current_value:,.2f}")
+            
+            with col3:
+                st.metric("Unrealized Gain/Loss", f"${unrealized_gain:,.2f}", f"{unrealized_gain_pct:.2f}%")
+            
+            # Stock info
+            if info:
+                st.subheader("Stock Information")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if 'marketCap' in info:
+                        market_cap = info['marketCap'] / 1e9  # Convert to billions
+                        st.metric("Market Cap", f"${market_cap:.1f}B")
+                    
+                    if 'peRatio' in info and info['peRatio']:
+                        st.metric("P/E Ratio", f"{info['peRatio']:.2f}")
+                
+                with col2:
+                    if 'dividendYield' in info and info['dividendYield']:
+                        dividend_yield = info['dividendYield'] * 100
+                        st.metric("Dividend Yield", f"{dividend_yield:.2f}%")
+                    
+                    if 'beta' in info and info['beta']:
+                        st.metric("Beta", f"{info['beta']:.2f}")
+        
+        else:
+            st.error(f"Could not fetch data for {selected_symbol}. Please check the symbol and try again.")
+        
+        # Portfolio overview
+        st.subheader("Portfolio Overview")
+        
+        # Create a simple portfolio performance chart
+        portfolio_data = []
+        for symbol in symbols:
+            holding = df[df['StockSymbol'] == symbol].iloc[0]
+            try:
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period="1d")
+                if not data.empty:
+                    current_price = data['Close'].iloc[-1]
+                else:
+                    continue
+                portfolio_data.append({
+                    'Symbol': symbol,
+                    'Shares': holding['Quantity'],
+                    'Avg Cost': holding['AveragePricePerShare'],
+                    'Current Price': current_price,
+                    'Cost Basis': holding['Quantity'] * holding['AveragePricePerShare'],
+                    'Current Value': holding['Quantity'] * current_price,
+                    'Gain/Loss': (holding['Quantity'] * current_price) - (holding['Quantity'] * holding['AveragePricePerShare'])
+                })
+            except:
+                continue
+        
+        if portfolio_data:
+            portfolio_df = pd.DataFrame(portfolio_data)
+            
+            # Portfolio summary
+            total_cost_basis = portfolio_df['Cost Basis'].sum()
+            total_current_value = portfolio_df['Current Value'].sum()
+            total_gain_loss = total_current_value - total_cost_basis
+            total_gain_loss_pct = (total_gain_loss / total_cost_basis) * 100
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Cost Basis", f"${total_cost_basis:,.2f}")
+            
+            with col2:
+                st.metric("Total Current Value", f"${total_current_value:,.2f}")
+            
+            with col3:
+                st.metric("Total Gain/Loss", f"${total_gain_loss:,.2f}")
+            
+            with col4:
+                st.metric("Total Return", f"{total_gain_loss_pct:.2f}%")
+            
+            # Portfolio allocation pie chart
+            fig_pie = px.pie(
+                portfolio_df, 
+                values='Current Value', 
+                names='Symbol',
+                title="Portfolio Allocation by Value"
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
 
 # Footer
 st.sidebar.markdown("---")
