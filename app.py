@@ -89,6 +89,25 @@ def format_number(value):
     else:
         return f"{value:,.0f}"
 
+# Lookup helper for stock names from symbol
+@st.cache_data(ttl=86400)
+def lookup_stock_name(symbol: str) -> str | None:
+    try:
+        if not symbol:
+            return None
+        ticker = yf.Ticker(symbol)
+        # Try info dict first (more consistent)
+        info = ticker.info
+        name = None
+        if isinstance(info, dict):
+            name = info.get('shortName') or info.get('longName') or info.get('symbol')
+        # Fallback
+        if name and isinstance(name, str) and name.strip():
+            return name.strip()
+    except Exception:
+        pass
+    return None
+
 # Chart Helper Functions
 def get_common_chart_layout(height=500):
     """Returns common layout settings for charts."""
@@ -378,8 +397,12 @@ elif page == "Trade Entry":
                     stock_name = ""
                     max_quantity = 0.0  # Ensure it's a float
             else:  # Buy
-                stock_name = st.text_input("Stock Name", placeholder="e.g., Apple Inc.")
                 stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
+                # Resolve stock name from symbol with fallback to symbol
+                resolved_name = lookup_stock_name(stock_symbol) if stock_symbol else None
+                display_name = resolved_name or (stock_symbol if stock_symbol else "")
+                if display_name:
+                    st.caption(f"Name: {display_name}")
                 max_quantity = None  # No limit for buying
             
             trade_date = st.date_input("Date of Trade", value=date.today())
@@ -475,8 +498,8 @@ elif page == "Trade Entry":
                 st.error("Please enter an account name.")
             elif trade_type in ["S", "T"] and (not stock_symbol.strip() or stock_symbol == ""):
                 st.error("Please select a stock to sell/transfer.")
-            elif trade_type == "B" and (not stock_name.strip() or not stock_symbol.strip()):
-                st.error("Please enter both stock name and symbol for buying.")
+            elif trade_type == "B" and (not stock_symbol.strip()):
+                st.error("Please enter a stock symbol for buying.")
             elif shares_traded < 1:
                 st.error(f"Shares traded must be at least 1. You entered: {shares_traded}")
             elif trade_type in ["S", "T"] and max_quantity is not None and shares_traded > int(max_quantity):
@@ -487,7 +510,7 @@ elif page == "Trade Entry":
                 # Prepare trade data
                 trade_data = {
                     'Account': account.strip(),
-                    'StockName': stock_name.strip(),
+                    'StockName': (resolved_name or stock_symbol).strip(),
                     'StockSymbol': stock_symbol.strip(),
                     'DateOfTrade': trade_date.strftime('%Y-%m-%d'),
                     'TradeType': trade_type,
@@ -534,8 +557,12 @@ elif page == "Pre-populate Database":
             else:
                 account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
             
-            stock_name = st.text_input("Stock Name", placeholder="e.g., Apple Inc.")
             stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
+            # Resolve stock name from symbol with fallback to symbol
+            resolved_name = lookup_stock_name(stock_symbol) if stock_symbol else None
+            display_name = resolved_name or (stock_symbol if stock_symbol else "")
+            if display_name:
+                st.caption(f"Name: {display_name}")
             quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
         
         with col2:
@@ -553,8 +580,6 @@ elif page == "Pre-populate Database":
             # Validation
             if not account.strip():
                 st.error("Please enter an account name.")
-            elif not stock_name.strip():
-                st.error("Please enter a stock name.")
             elif not stock_symbol.strip():
                 st.error("Please enter a stock symbol.")
             elif quantity < 1:
@@ -565,7 +590,7 @@ elif page == "Pre-populate Database":
                 # Prepare holding data
                 holding_data = {
                     'Account': account.strip(),
-                    'StockName': stock_name.strip(),
+                    'StockName': (resolved_name or stock_symbol).strip(),
                     'StockSymbol': stock_symbol.strip(),
                     'Quantity': int(quantity),
                     'BookCost': book_cost,
