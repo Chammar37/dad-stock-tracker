@@ -54,6 +54,12 @@ def get_trade_calculator():
 data_manager = get_data_manager()
 calculator = get_trade_calculator()
 
+# One-time migration to integerize quantities in CSVs
+try:
+    data_manager.migrate_integer_quantities()
+except Exception:
+    pass
+
 # Sidebar navigation
 st.sidebar.title("📈 Stock Tracker")
 page = st.sidebar.selectbox(
@@ -210,21 +216,20 @@ def get_available_stocks_for_sell(account: str = None) -> list:
         if account:
             df = df[df['Account'] == account]
         
-        # Only include stocks with quantity > 0 (use small epsilon for floating point precision)
-        df = df[df['Quantity'] > 0.0001]
+        # Ensure integer quantities and include stocks with quantity > 0
+        if 'Quantity' in df.columns:
+            df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0).round().astype(int)
+        df = df[df['Quantity'] > 0]
         
         available_stocks = []
         for _, row in df.iterrows():
             symbol = row['StockSymbol']
             name = row['StockName']
-            quantity = row['Quantity']
+            quantity = int(row['Quantity'])
             account_name = row['Account']
             
-            # Format quantity display based on size
-            if quantity < 1:
-                qty_display = f"{quantity:.3f}"
-            else:
-                qty_display = f"{quantity:.0f}"
+            # Integer quantity display
+            qty_display = f"{quantity:d}"
             
             display_name = f"{symbol} - {name} ({qty_display} shares in {account_name})"
             available_stocks.append((symbol, display_name, quantity))
@@ -235,7 +240,7 @@ def get_available_stocks_for_sell(account: str = None) -> list:
 
 # Page 1: Consolidated Record (Dashboard)
 if page == "Consolidated Record":
-    st.title("📊 Consolidated Record")
+    st.title("Consolidated Record")
     st.markdown("View all your stock holdings across all accounts")
     
     # Load consolidated data
@@ -308,7 +313,7 @@ if page == "Consolidated Record":
 
 # Page 2: Trade Entry
 elif page == "Trade Entry":
-    st.title("📝 Trade Entry")
+    st.title("Trade Entry")
     st.markdown("Record new stock trades")
     
     # Get existing accounts for dropdown
@@ -318,7 +323,7 @@ elif page == "Trade Entry":
     trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
                             format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
     
-    with st.form("trade_form"):
+    with st.form("trade_form", clear_on_submit=True):
         st.subheader("Trade Details")
         
         col1, col2 = st.columns(2)
@@ -358,11 +363,11 @@ elif page == "Trade Entry":
                                 stock_symbol = symbol
                                 # Extract stock name from display
                                 stock_name = display.split(" - ")[1].split(" (")[0]
-                                max_quantity = float(quantity)  # Ensure it's a float
+                                max_quantity = int(quantity)
                                 break
                         
                         # Show available quantity
-                        st.info(f"Available: {max_quantity:.0f} shares")
+                        st.info(f"Available: {max_quantity:d} shares")
                     else:
                         stock_symbol = ""
                         stock_name = ""
@@ -380,26 +385,23 @@ elif page == "Trade Entry":
             trade_date = st.date_input("Date of Trade", value=date.today())
         
         with col2:
-            # Shares traded with conditional max value
+            # Shares traded integer-only
             if trade_type in ["S", "T"] and max_quantity is not None and max_quantity > 0:
-                # Determine appropriate step size based on max quantity
-                if max_quantity < 1:
-                    step_size = 0.001  # For very small quantities like Bitcoin
-                elif max_quantity < 10:
-                    step_size = 0.01   # For small quantities
-                else:
-                    step_size = 0.01   # For larger quantities
-                
                 shares_traded = st.number_input(
-                    "Shares Traded", 
-                    min_value=0.0, 
-                    max_value=float(max_quantity),  # Ensure it's a float
-                    step=step_size, 
-                    format="%.3f" if max_quantity < 1 else "%.2f",
-                    help=f"Maximum: {max_quantity:.3f} shares" if max_quantity < 1 else f"Maximum: {max_quantity:.0f} shares"
+                    "Shares Traded",
+                    min_value=0,
+                    max_value=int(max_quantity),
+                    step=1,
+                    format="%d",
+                    help=f"Maximum: {int(max_quantity)} shares"
                 )
             else:
-                shares_traded = st.number_input("Shares Traded", min_value=0.0, step=0.01, format="%.2f")
+                shares_traded = st.number_input(
+                    "Shares Traded",
+                    min_value=0,
+                    step=1,
+                    format="%d"
+                )
             
             price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
             commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=0.0)
@@ -407,11 +409,11 @@ elif page == "Trade Entry":
         submitted = st.form_submit_button("Process Trade", type="primary")
         
         if submitted:
-            # Ensure shares_traded is a proper float
+            # Ensure shares_traded is an int
             try:
-                shares_traded = float(shares_traded)
+                shares_traded = int(shares_traded)
             except (ValueError, TypeError):
-                shares_traded = 0.0
+                shares_traded = 0
             
             # Validation with better error handling
             if not account.strip():
@@ -420,13 +422,10 @@ elif page == "Trade Entry":
                 st.error("Please select a stock to sell/transfer.")
             elif trade_type == "B" and (not stock_name.strip() or not stock_symbol.strip()):
                 st.error("Please enter both stock name and symbol for buying.")
-            elif shares_traded <= 0 or shares_traded < 0.0001:  # Handle very small decimal values
-                st.error(f"Shares traded must be greater than 0. You entered: {shares_traded}")
-            elif trade_type in ["S", "T"] and max_quantity is not None and shares_traded > max_quantity + 0.0001:  # Add small epsilon for precision
-                if max_quantity < 1:
-                    st.error(f"Cannot sell/transfer more than {max_quantity:.3f} shares. You tried to sell: {shares_traded:.3f} shares.")
-                else:
-                    st.error(f"Cannot sell/transfer more than {max_quantity:.0f} shares. You tried to sell: {shares_traded:.0f} shares.")
+            elif shares_traded < 1:
+                st.error(f"Shares traded must be at least 1. You entered: {shares_traded}")
+            elif trade_type in ["S", "T"] and max_quantity is not None and shares_traded > int(max_quantity):
+                st.error(f"Cannot sell/transfer more than {int(max_quantity)} shares. You tried to sell: {shares_traded} shares.")
             elif price_per_share <= 0:
                 st.error("Price per share must be greater than 0.")
             else:
@@ -437,7 +436,7 @@ elif page == "Trade Entry":
                     'StockSymbol': stock_symbol.strip(),
                     'DateOfTrade': trade_date.strftime('%Y-%m-%d'),
                     'TradeType': trade_type,
-                    'SharesTraded': shares_traded,
+                    'SharesTraded': int(shares_traded),
                     'PricePerShare': price_per_share,
                     'Commission': commission
                 }
@@ -448,19 +447,15 @@ elif page == "Trade Entry":
                 
                 if success:
                     st.success(message)
-                    st.info("Redirecting to Consolidated Record to view updated holdings...")
-                    # Set session state to redirect to Consolidated Record
-                    st.session_state.page = "Consolidated Record"
-                    st.rerun()
                 else:
                     st.error(message)
 
 # Page 3: Pre-populate Database
 elif page == "Pre-populate Database":
-    st.title("📥 Pre-populate Database")
+    st.title("Pre-populate Database")
     st.markdown("Add existing stock holdings to the database")
     
-    with st.form("prepopulate_form"):
+    with st.form("prepopulate_form", clear_on_submit=True):
         st.subheader("Existing Holding Details")
         
         col1, col2 = st.columns(2)
@@ -475,15 +470,15 @@ elif page == "Pre-populate Database":
             
             stock_name = st.text_input("Stock Name", placeholder="e.g., Apple Inc.")
             stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-            quantity = st.number_input("Quantity", min_value=0.0, step=0.01, format="%.2f")
+            quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
         
         with col2:
             book_cost = st.number_input("Book Cost ($)", min_value=0.0, step=0.01, format="%.2f")
             acquisition_date = st.date_input("Date of Acquisition")
             
             # Show calculated cost per share
-            if quantity > 0 and book_cost > 0:
-                cost_per_share = book_cost / quantity
+            if quantity and quantity > 0 and book_cost > 0:
+                cost_per_share = book_cost / int(quantity)
                 st.metric("Cost per Share", format_currency(cost_per_share))
         
         submitted = st.form_submit_button("Add Holding", type="primary")
@@ -496,8 +491,8 @@ elif page == "Pre-populate Database":
                 st.error("Please enter a stock name.")
             elif not stock_symbol.strip():
                 st.error("Please enter a stock symbol.")
-            elif quantity <= 0:
-                st.error("Quantity must be greater than 0.")
+            elif quantity < 1:
+                st.error("Quantity must be at least 1.")
             elif book_cost <= 0:
                 st.error("Book cost must be greater than 0.")
             else:
@@ -506,7 +501,7 @@ elif page == "Pre-populate Database":
                     'Account': account.strip(),
                     'StockName': stock_name.strip(),
                     'StockSymbol': stock_symbol.strip(),
-                    'Quantity': quantity,
+                    'Quantity': int(quantity),
                     'BookCost': book_cost,
                     'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
                 }
@@ -517,16 +512,12 @@ elif page == "Pre-populate Database":
                 
                 if success:
                     st.success(message)
-                    st.info("Redirecting to Consolidated Record to view updated holdings...")
-                    # Set session state to redirect to Consolidated Record
-                    st.session_state.page = "Consolidated Record"
-                    st.rerun()
                 else:
                     st.error(message)
 
 # Page 4: Trade History
 elif page == "Trade History":
-    st.title("📋 Trade History")
+    st.title("Trade History")
     st.markdown("View all recorded trades")
     
     # Load trades data
@@ -607,7 +598,7 @@ elif page == "Trade History":
 
 # Page 5: Stock Charts
 elif page == "Stock Charts":
-    st.title("📈 Stock Charts")
+    st.title("Stock Charts")
     st.markdown("Live stock charts for your holdings")
     
     # Load consolidated data

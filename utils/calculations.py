@@ -22,7 +22,7 @@ class TradeCalculator:
         try:
             account = trade_data['Account']
             stock_symbol = trade_data['StockSymbol']
-            shares_traded = float(trade_data['SharesTraded'])
+            shares_traded = int(trade_data['SharesTraded'])
             price_per_share = float(trade_data['PricePerShare'])
             commission = float(trade_data.get('Commission', 0))
             
@@ -31,20 +31,20 @@ class TradeCalculator:
             
             if existing_record:
                 # Existing stock - update calculations
-                current_quantity = float(existing_record['Quantity'])
+                current_quantity = int(existing_record['Quantity'])
                 current_avg_price = float(existing_record['AveragePricePerShare'])
                 current_capital_gain_loss = float(existing_record.get('CapitalGainLoss', 0))
                 
                 # Calculate new values
                 cost_of_trade = (shares_traded * price_per_share) + commission
                 total_cost_existing = current_quantity * current_avg_price
-                new_quantity = current_quantity + shares_traded
+                new_quantity = int(current_quantity + shares_traded)
                 new_avg_price = (total_cost_existing + cost_of_trade) / new_quantity
                 
                 # Update consolidated record
                 updated_data = {
                     'StockName': trade_data['StockName'],
-                    'Quantity': new_quantity,
+                    'Quantity': int(new_quantity),
                     'AveragePricePerShare': round(new_avg_price, 4),
                     'CapitalGainLoss': current_capital_gain_loss,  # No change for buy
                     'DateOfAcquisition': existing_record['DateOfAcquisition']  # Keep original date
@@ -57,7 +57,7 @@ class TradeCalculator:
                 
                 updated_data = {
                     'StockName': trade_data['StockName'],
-                    'Quantity': shares_traded,
+                    'Quantity': int(shares_traded),
                     'AveragePricePerShare': round(new_avg_price, 4),
                     'CapitalGainLoss': 0,
                     'DateOfAcquisition': trade_data['DateOfTrade']
@@ -88,7 +88,7 @@ class TradeCalculator:
         try:
             account = trade_data['Account']
             stock_symbol = trade_data['StockSymbol']
-            shares_traded = float(trade_data['SharesTraded'])
+            shares_traded = int(trade_data['SharesTraded'])
             price_per_share = float(trade_data['PricePerShare'])
             commission = float(trade_data.get('Commission', 0))
             
@@ -98,7 +98,7 @@ class TradeCalculator:
             if not existing_record:
                 return False, f"No existing holdings found for {stock_symbol} in {account}"
             
-            current_quantity = float(existing_record['Quantity'])
+            current_quantity = int(existing_record['Quantity'])
             current_avg_price = float(existing_record['AveragePricePerShare'])
             current_capital_gain_loss = float(existing_record.get('CapitalGainLoss', 0))
             
@@ -109,13 +109,13 @@ class TradeCalculator:
             # Calculate new values
             net_proceeds = (shares_traded * price_per_share) - commission
             trade_capital_gain_loss = net_proceeds - (shares_traded * current_avg_price)
-            new_quantity = current_quantity - shares_traded
+            new_quantity = int(current_quantity - shares_traded)
             new_capital_gain_loss = current_capital_gain_loss + trade_capital_gain_loss
             
             # Update consolidated record
             updated_data = {
                 'StockName': trade_data['StockName'],
-                'Quantity': new_quantity,
+                'Quantity': int(new_quantity),
                 'AveragePricePerShare': current_avg_price,  # No change for sell
                 'CapitalGainLoss': round(new_capital_gain_loss, 2),
                 'DateOfAcquisition': existing_record['DateOfAcquisition']  # Keep original date
@@ -175,7 +175,7 @@ class TradeCalculator:
         try:
             account = holding_data['Account']
             stock_symbol = holding_data['StockSymbol']
-            quantity = float(holding_data['Quantity'])
+            quantity = int(holding_data['Quantity'])
             book_cost = float(holding_data['BookCost'])
             
             if quantity <= 0:
@@ -195,7 +195,7 @@ class TradeCalculator:
             # Create new consolidated record
             updated_data = {
                 'StockName': holding_data['StockName'],
-                'Quantity': quantity,
+                'Quantity': int(quantity),
                 'AveragePricePerShare': round(cost_per_share, 4),
                 'CapitalGainLoss': 0,
                 'DateOfAcquisition': holding_data['DateOfAcquisition']

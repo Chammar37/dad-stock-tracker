@@ -2,3 +2,5 @@ data/*
 venv/*
 *.pyc
 __pycache__/app.cpython-313.pyc
+utils/__pycache__/*
+utils/__pycache__/**/*.pyc

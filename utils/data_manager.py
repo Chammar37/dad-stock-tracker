@@ -41,6 +41,7 @@ class DataManager:
                 self.trades_path, index=False
             )
     
+
     def read_consolidated(self) -> pd.DataFrame:
         """Read the consolidated holdings data."""
         try:
@@ -48,6 +49,9 @@ class DataManager:
             # Convert date column to datetime
             if 'DateOfAcquisition' in df.columns:
                 df['DateOfAcquisition'] = pd.to_datetime(df['DateOfAcquisition'], errors='coerce')
+            # Ensure integer quantities
+            if 'Quantity' in df.columns:
+                df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0).round().astype(int)
             return df
         except Exception as e:
             st.error(f"Error reading consolidated data: {e}")
@@ -60,6 +64,9 @@ class DataManager:
             # Convert date column to datetime
             if 'DateOfTrade' in df.columns:
                 df['DateOfTrade'] = pd.to_datetime(df['DateOfTrade'], errors='coerce')
+            # Ensure integer shares traded
+            if 'SharesTraded' in df.columns:
+                df['SharesTraded'] = pd.to_numeric(df['SharesTraded'], errors='coerce').fillna(0).round().astype(int)
             return df
         except Exception as e:
             st.error(f"Error reading trades data: {e}")
