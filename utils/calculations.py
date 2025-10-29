@@ -69,7 +69,7 @@ class TradeCalculator:
             )
             
             if success:
-                return True, f"Buy trade processed successfully. New quantity: {updated_data['Quantity']}, New avg price: ${updated_data['AveragePricePerShare']:.4f}"
+                return True, f"Buy trade processed successfully. New quantity: {updated_data['Quantity']}, New avg price: {updated_data['AveragePricePerShare']:.4f}"
             else:
                 return False, "Failed to update consolidated record"
                 
@@ -127,7 +127,7 @@ class TradeCalculator:
             )
             
             if success:
-                return True, f"Sell trade processed successfully. Remaining quantity: {new_quantity}, Trade gain/loss: ${trade_capital_gain_loss:.2f}, Total gain/loss: ${new_capital_gain_loss:.2f}"
+                return True, f"Sell trade processed successfully. Remaining quantity: {new_quantity}, Trade gain/loss: {trade_capital_gain_loss:.2f}, Total gain/loss: {new_capital_gain_loss:.2f}"
             else:
                 return False, "Failed to update consolidated record"
                 

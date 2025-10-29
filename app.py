@@ -323,7 +323,7 @@ elif page == "Trade Entry":
     trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
                             format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
     
-    with st.form("trade_form", clear_on_submit=True):
+    with st.form("trade_form", clear_on_submit=False):
         st.subheader("Trade Details")
         
         col1, col2 = st.columns(2)
@@ -389,25 +389,80 @@ elif page == "Trade Entry":
             if trade_type in ["S", "T"] and max_quantity is not None and max_quantity > 0:
                 shares_traded = st.number_input(
                     "Shares Traded",
-                    min_value=0,
+                    min_value=1,
                     max_value=int(max_quantity),
                     step=1,
                     format="%d",
+                    value=1,
                     help=f"Maximum: {int(max_quantity)} shares"
                 )
             else:
                 shares_traded = st.number_input(
                     "Shares Traded",
-                    min_value=0,
+                    min_value=1,
                     step=1,
-                    format="%d"
+                    format="%d",
+                    value=1
                 )
             
             price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
-            commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=0.0)
+            commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99)
         
-        submitted = st.form_submit_button("Process Trade", type="primary")
+        # For Sell trades, offer a Preview button that validates and shows calculations without saving
+        col_btn1, col_btn2 = st.columns(2)
+        preview_submitted = False
+        with col_btn1:
+            if trade_type == "S":
+                preview_submitted = st.form_submit_button(
+                    "Preview Trade",
+                    type="secondary",
+                    help="Validate and preview this sell without saving"
+                )
+        with col_btn2:
+            submitted = st.form_submit_button("Process Trade", type="primary")
         
+        # Handle preview for Sell without persisting
+        if preview_submitted:
+            try:
+                shares_traded = int(shares_traded)
+            except (ValueError, TypeError):
+                shares_traded = 0
+            if not account.strip():
+                st.error("Please enter an account name.")
+            elif not stock_symbol.strip():
+                st.error("Please select a stock to sell.")
+            elif shares_traded < 1:
+                st.error(f"Shares traded must be at least 1. You entered: {shares_traded}")
+            elif max_quantity is None or shares_traded > int(max_quantity):
+                st.error(f"Cannot sell more than {int(max_quantity) if max_quantity is not None else 0} shares.")
+            elif price_per_share <= 0:
+                st.error("Price per share must be greater than 0.")
+            else:
+                # Fetch existing holding and compute preview values
+                record = data_manager.get_consolidated_record(account.strip(), stock_symbol.strip())
+                if not record:
+                    st.error(f"No existing holdings found for {stock_symbol} in {account}")
+                else:
+                    current_quantity = int(record['Quantity'])
+                    current_avg_price = float(record['AveragePricePerShare'])
+                    current_capital_gain_loss = float(record.get('CapitalGainLoss', 0))
+                    if shares_traded > current_quantity:
+                        st.error(f"Insufficient shares. You have {current_quantity}, trying to sell {shares_traded}")
+                    else:
+                        net_proceeds = (shares_traded * float(price_per_share)) - float(commission)
+                        trade_capital_gain_loss = net_proceeds - (shares_traded * current_avg_price)
+                        new_quantity = current_quantity - shares_traded
+                        new_capital_gain_loss = current_capital_gain_loss + trade_capital_gain_loss
+                        st.subheader("Preview")
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("Net Proceeds", format_currency(net_proceeds))
+                        with col_b:
+                            st.metric("Trade Gain/Loss", format_currency(trade_capital_gain_loss))
+                        with col_c:
+                            st.metric("Remaining Quantity", f"{new_quantity}")
+                        st.caption(f"Total Gain/Loss after trade: {format_currency(new_capital_gain_loss)}")
+
         if submitted:
             # Ensure shares_traded is an int
             try:
@@ -447,6 +502,17 @@ elif page == "Trade Entry":
                 
                 if success:
                     st.success(message)
+                    # Clear only after successful processing (do not clear on preview)
+                    for k in [
+                        "sell_stock_select",
+                        "Stock Name",
+                        "Stock Symbol",
+                        "Shares Traded",
+                        "Price per Share ($)",
+                        "Commission ($)",
+                        "Date of Trade",
+                    ]:
+                        st.session_state.pop(k, None)
                 else:
                     st.error(message)
 
@@ -511,7 +577,12 @@ elif page == "Pre-populate Database":
                     success, message = calculator.add_existing_holding(holding_data)
                 
                 if success:
-                    st.success(message)
+                    # Avoid Markdown parsing issues by rendering message as plain text
+                    st.success("Trade processed successfully.")
+                    st.text(message)
+                if success:
+                    st.success("Holding added successfully.")
+                    st.text(message)
                 else:
                     st.error(message)
 
