@@ -4,3 +4,4 @@ venv/*
 __pycache__/app.cpython-313.pyc
 utils/__pycache__/*
 utils/__pycache__/**/*.pyc
+utils/__pycache__/calculations.cpython-313.pyc

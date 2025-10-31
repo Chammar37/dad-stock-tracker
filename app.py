@@ -510,7 +510,8 @@ elif page == "Trade Entry":
                 # Prepare trade data
                 trade_data = {
                     'Account': account.strip(),
-                    'StockName': (resolved_name or stock_symbol).strip(),
+                    # Use resolved_name for Buy, otherwise use the selected stock_name; fallback to symbol
+                    'StockName': (((resolved_name if trade_type == "B" else stock_name) or stock_symbol).strip()),
                     'StockSymbol': stock_symbol.strip(),
                     'DateOfTrade': trade_date.strftime('%Y-%m-%d'),
                     'TradeType': trade_type,
