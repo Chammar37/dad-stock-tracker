@@ -89,24 +89,62 @@ def format_number(value):
     else:
         return f"{value:,.0f}"
 
-# Lookup helper for stock names from symbol
+# Helper function to resolve TSX symbols (tries .TO first, then falls back to plain symbol)
 @st.cache_data(ttl=86400)
-def lookup_stock_name(symbol: str) -> str | None:
+def resolve_stock_symbol(symbol: str) -> tuple[str | None, str | None]:
+    """
+    Resolves a stock symbol, trying TSX (.TO) first, then falling back to plain symbol.
+    Returns tuple of (resolved_symbol, stock_name) or (None, None) if not found.
+    """
+    if not symbol:
+        return None, None
+    
+    symbol = symbol.strip().upper()
+    
+    # If symbol already has an exchange suffix, use it as-is
+    if '.' in symbol:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            if isinstance(info, dict) and info:
+                name = info.get('shortName') or info.get('longName') or info.get('symbol')
+                if name and isinstance(name, str) and name.strip():
+                    return symbol, name.strip()
+        except Exception:
+            pass
+        return None, None
+    
+    # Try TSX first (.TO suffix) for Canadian stocks
+    tsx_symbol = f"{symbol}.TO"
     try:
-        if not symbol:
-            return None
-        ticker = yf.Ticker(symbol)
-        # Try info dict first (more consistent)
+        ticker = yf.Ticker(tsx_symbol)
         info = ticker.info
-        name = None
-        if isinstance(info, dict):
+        if isinstance(info, dict) and info:
             name = info.get('shortName') or info.get('longName') or info.get('symbol')
-        # Fallback
-        if name and isinstance(name, str) and name.strip():
-            return name.strip()
+            if name and isinstance(name, str) and name.strip():
+                return tsx_symbol, name.strip()
     except Exception:
         pass
-    return None
+    
+    # Fallback to plain symbol (for US stocks or if TSX lookup failed)
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        if isinstance(info, dict) and info:
+            name = info.get('shortName') or info.get('longName') or info.get('symbol')
+            if name and isinstance(name, str) and name.strip():
+                return symbol, name.strip()
+    except Exception:
+        pass
+    
+    return None, None
+
+# Lookup helper for stock names from symbol (backward compatibility)
+@st.cache_data(ttl=86400)
+def lookup_stock_name(symbol: str) -> str | None:
+    """Lookup stock name, resolving TSX symbols automatically."""
+    _, name = resolve_stock_symbol(symbol)
+    return name
 
 # Chart Helper Functions
 def get_common_chart_layout(height=500):
@@ -358,6 +396,8 @@ elif page == "Trade Entry":
             stock_symbol = ""
             stock_name = ""
             max_quantity = None
+            resolved_symbol = None
+            resolved_name = None
             
             # Conditional stock input based on trade type
             if trade_type in ["S", "T"]:  # Sell or Transfer
@@ -398,11 +438,14 @@ elif page == "Trade Entry":
                     max_quantity = 0.0  # Ensure it's a float
             else:  # Buy
                 stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-                # Resolve stock name from symbol with fallback to symbol
-                resolved_name = lookup_stock_name(stock_symbol) if stock_symbol else None
+                # Resolve stock symbol (tries TSX .TO first) and get name
+                if stock_symbol:
+                    resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
                 display_name = resolved_name or (stock_symbol if stock_symbol else "")
                 if display_name:
                     st.caption(f"Name: {display_name}")
+                    if resolved_symbol and resolved_symbol != stock_symbol:
+                        st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
                 max_quantity = None  # No limit for buying
             
             trade_date = st.date_input("Date of Trade", value=date.today())
@@ -507,12 +550,19 @@ elif page == "Trade Entry":
             elif price_per_share <= 0:
                 st.error("Price per share must be greater than 0.")
             else:
+                # For Buy trades, use resolved symbol (with .TO if TSX), otherwise use the symbol from selection
+                if trade_type == "B" and resolved_symbol:
+                    final_symbol = resolved_symbol
+                    final_name = resolved_name or stock_symbol
+                else:
+                    final_symbol = stock_symbol.strip()
+                    final_name = stock_name or stock_symbol
+                
                 # Prepare trade data
                 trade_data = {
                     'Account': account.strip(),
-                    # Use resolved_name for Buy, otherwise use the selected stock_name; fallback to symbol
-                    'StockName': (((resolved_name if trade_type == "B" else stock_name) or stock_symbol).strip()),
-                    'StockSymbol': stock_symbol.strip(),
+                    'StockName': (final_name or final_symbol).strip(),
+                    'StockSymbol': final_symbol.strip(),
                     'DateOfTrade': trade_date.strftime('%Y-%m-%d'),
                     'TradeType': trade_type,
                     'SharesTraded': int(shares_traded),
@@ -559,11 +609,16 @@ elif page == "Pre-populate Database":
                 account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
             
             stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-            # Resolve stock name from symbol with fallback to symbol
-            resolved_name = lookup_stock_name(stock_symbol) if stock_symbol else None
+            # Resolve stock symbol (tries TSX .TO first) and get name
+            resolved_symbol = None
+            resolved_name = None
+            if stock_symbol:
+                resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
             display_name = resolved_name or (stock_symbol if stock_symbol else "")
             if display_name:
                 st.caption(f"Name: {display_name}")
+                if resolved_symbol and resolved_symbol != stock_symbol:
+                    st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
             quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
         
         with col2:
@@ -588,11 +643,15 @@ elif page == "Pre-populate Database":
             elif book_cost <= 0:
                 st.error("Book cost must be greater than 0.")
             else:
+                # Use resolved symbol (with .TO if TSX), otherwise use the entered symbol
+                final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
+                final_name = resolved_name or stock_symbol
+                
                 # Prepare holding data
                 holding_data = {
                     'Account': account.strip(),
-                    'StockName': (resolved_name or stock_symbol).strip(),
-                    'StockSymbol': stock_symbol.strip(),
+                    'StockName': final_name.strip(),
+                    'StockSymbol': final_symbol.strip(),
                     'Quantity': int(quantity),
                     'BookCost': book_cost,
                     'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
@@ -602,10 +661,6 @@ elif page == "Pre-populate Database":
                 with st.spinner("Adding holding..."):
                     success, message = calculator.add_existing_holding(holding_data)
                 
-                if success:
-                    # Avoid Markdown parsing issues by rendering message as plain text
-                    st.success("Trade processed successfully.")
-                    st.text(message)
                 if success:
                     st.success("Holding added successfully.")
                     st.text(message)
