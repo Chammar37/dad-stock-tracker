@@ -451,29 +451,30 @@ elif page == "Trade Entry":
             trade_date = st.date_input("Date of Trade", value=date.today())
         
         with col2:
-            # Shares traded integer-only
+            # Calculate max based on selection
             if trade_type in ["S", "T"] and max_quantity is not None and max_quantity > 0:
-                shares_traded = st.number_input(
-                    "Shares Traded",
-                    min_value=1,
-                    max_value=int(max_quantity),
-                    step=1,
-                    format="%d",
-                    value=1,
-                    help=f"Maximum: {int(max_quantity)} shares"
-                )
+                shares_max = int(max_quantity)
+                shares_help = f"Maximum: {shares_max} shares"
             else:
-                shares_traded = st.number_input(
-                    "Shares Traded",
-                    min_value=1,
-                    step=1,
-                    format="%d",
-                    value=1
-                )
+                shares_max = None
+                shares_help = None
             
+            # Inside forms, widgets with key don't automatically read from session_state
+            # We must explicitly pass value to ensure the widget displays the stored value
+            shares_traded = st.number_input(
+                "Shares Traded",
+                min_value=1,
+                max_value=shares_max,
+                step=1,
+                format="%d",
+                help=shares_help,
+                value=st.session_state.get("shares_input", 1),  # Required inside forms
+                key="shares_input"  # Stores value in session_state on form submission
+            )
+
             price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
             commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99)
-        
+
         # For Sell trades, offer a Preview button that validates and shows calculations without saving
         col_btn1, col_btn2 = st.columns(2)
         preview_submitted = False
@@ -489,10 +490,12 @@ elif page == "Trade Entry":
         
         # Handle preview for Sell without persisting
         if preview_submitted:
+            # shares_traded already has the correct value from the widget
             try:
                 shares_traded = int(shares_traded)
             except (ValueError, TypeError):
-                shares_traded = 0
+                shares_traded = 1
+                st.warning("Invalid input for number of shares. Setting shares traded to 1.")
             if not account.strip():
                 st.error("Please enter an account name.")
             elif not stock_symbol.strip():
@@ -530,11 +533,11 @@ elif page == "Trade Entry":
                         st.caption(f"Total Gain/Loss after trade: {format_currency(new_capital_gain_loss)}")
 
         if submitted:
-            # Ensure shares_traded is an int
+            # shares_traded already has the correct value from the widget
             try:
                 shares_traded = int(shares_traded)
             except (ValueError, TypeError):
-                shares_traded = 0
+                shares_traded = 1
             
             # Validation with better error handling
             if not account.strip():
