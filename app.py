@@ -299,72 +299,130 @@ def get_available_stocks_for_sell(account: str = None) -> list:
 if page == "Consolidated Record":
     st.title("Consolidated Record")
     st.markdown("View all your stock holdings across all accounts")
-    
+
     # Load consolidated data
     df = data_manager.read_consolidated()
-    
+
     if df.empty:
-        st.info("No holdings found. Use 'Pre-populate Database' to add existing holdings or 'Trade Entry' to record trades.")
+        st.info("💡 No holdings found. Use 'Pre-populate Database' to add existing holdings or 'Trade Entry' to record trades.")
     else:
-        # Summary statistics
+        # Summary statistics with color-coded gains/losses
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             total_holdings = len(df)
             st.metric("Total Holdings", total_holdings)
-        
+
         with col2:
             total_quantity = df['Quantity'].sum()
             st.metric("Total Shares", format_number(total_quantity))
-        
+
         with col3:
             total_value = (df['Quantity'] * df['AveragePricePerShare']).sum()
-            st.metric("Total Value", format_currency(total_value))
-        
+            st.metric("Total Book Value", format_currency(total_value))
+
         with col4:
             total_gain_loss = df['CapitalGainLoss'].sum()
-            st.metric("Total Gain/Loss", format_currency(total_gain_loss))
-        
-        # Filters
-        st.subheader("Filters")
-        col1, col2 = st.columns(2)
-        
+            # Calculate percentage if possible
+            gain_loss_pct = (total_gain_loss / total_value * 100) if total_value > 0 else 0
+            st.metric(
+                "Total Gain/Loss",
+                format_currency(total_gain_loss),
+                delta=f"{gain_loss_pct:+.2f}%",
+                delta_color="normal"
+            )
+
+        st.divider()
+
+        # Filters and Actions row
+        col1, col2, col3 = st.columns([2, 2, 1])
+
         with col1:
             accounts = ['All'] + data_manager.get_accounts()
             selected_account = st.selectbox("Filter by Account", accounts)
-        
+
         with col2:
             symbols = ['All'] + data_manager.get_stock_symbols()
             selected_symbol = st.selectbox("Filter by Stock Symbol", symbols)
-        
+
+        with col3:
+            st.write("")  # Spacer
+            st.write("")  # Spacer
+            # Export button
+            csv = df.to_csv(index=False)
+            st.download_button(
+                label="📥 Export CSV",
+                data=csv,
+                file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
         # Apply filters
         filtered_df = df.copy()
         if selected_account != 'All':
             filtered_df = filtered_df[filtered_df['Account'] == selected_account]
         if selected_symbol != 'All':
             filtered_df = filtered_df[filtered_df['StockSymbol'] == selected_symbol]
-        
+
         # Display table
         if not filtered_df.empty:
             # Format the dataframe for display
             display_df = filtered_df.copy()
+
+            # Add a color indicator column for gain/loss
+            def gain_loss_indicator(value):
+                if value > 0:
+                    return f"🟢 {format_currency(value)}"
+                elif value < 0:
+                    return f"🔴 {format_currency(value)}"
+                else:
+                    return f"⚪ {format_currency(value)}"
+
             display_df['Quantity'] = display_df['Quantity'].apply(format_number)
             display_df['AveragePricePerShare'] = display_df['AveragePricePerShare'].apply(format_currency)
-            display_df['CapitalGainLoss'] = display_df['CapitalGainLoss'].apply(format_currency)
+            display_df['GainLossFormatted'] = display_df['CapitalGainLoss'].apply(gain_loss_indicator)
             display_df['DateOfAcquisition'] = pd.to_datetime(display_df['DateOfAcquisition']).dt.strftime('%Y-%m-%d')
-            
+
             # Rename columns for better display
             display_df = display_df.rename(columns={
                 'Account': 'Account',
                 'StockName': 'Stock Name',
                 'StockSymbol': 'Symbol',
-                'Quantity': 'Quantity',
-                'AveragePricePerShare': 'Avg Price/Share',
-                'CapitalGainLoss': 'Gain/Loss',
-                'DateOfAcquisition': 'Date Acquired'
+                'Quantity': 'Shares',
+                'AveragePricePerShare': 'Avg Price',
+                'GainLossFormatted': 'Gain/Loss',
+                'DateOfAcquisition': 'Acquired'
             })
-            
-            st.dataframe(display_df, width='stretch')
+
+            # Select and reorder columns
+            columns_to_show = ['Account', 'Symbol', 'Stock Name', 'Shares', 'Avg Price', 'Gain/Loss', 'Acquired']
+            display_df = display_df[columns_to_show]
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # Add portfolio allocation chart if multiple holdings
+            if len(filtered_df) > 1:
+                st.subheader("Portfolio Allocation")
+
+                # Calculate values for pie chart
+                chart_df = filtered_df.copy()
+                chart_df['Value'] = chart_df['Quantity'] * chart_df['AveragePricePerShare']
+
+                fig_pie = px.pie(
+                    chart_df,
+                    values='Value',
+                    names='StockSymbol',
+                    title="Holdings by Book Value",
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(
+                    showlegend=True,
+                    height=400,
+                    margin=dict(t=50, b=0, l=0, r=0)
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
         else:
             st.info("No holdings match the selected filters.")
 
@@ -376,9 +434,9 @@ elif page == "Trade Entry":
     # Get existing accounts for dropdown
     existing_accounts = data_manager.get_accounts()
     
-    # Trade type selection (outside form for immediate updates)
-    trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
-                            format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
+    # Trade type selection (outside form for immediate updates) with icons
+    trade_type = st.selectbox("Trade Type", ["B", "S", "T"],
+                            format_func=lambda x: {"B": "🟢 Buy", "S": "🔴 Sell", "T": "🔄 Transfer"}[x])
     
     with st.form("trade_form", clear_on_submit=False):
         st.subheader("Trade Details")
@@ -472,8 +530,28 @@ elif page == "Trade Entry":
                 key="shares_input"  # Stores value in session_state on form submission
             )
 
-            price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
-            commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99)
+            price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f",
+                                             help="Price per share for this trade")
+
+            # Commission with quick presets
+            col_comm1, col_comm2 = st.columns([3, 1])
+            with col_comm1:
+                commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99,
+                                            help="Trading commission/fee")
+            with col_comm2:
+                st.write("")  # Spacer
+                if st.button("$0", use_container_width=True, help="No commission"):
+                    st.session_state['commission_preset'] = 0.0
+
+            # Show trade value calculator
+            if shares_traded and price_per_share:
+                trade_value = shares_traded * price_per_share
+                if trade_type == "B":
+                    total_cost = trade_value + commission
+                    st.info(f"💰 Total Cost: {format_currency(total_cost)} ({format_currency(trade_value)} + {format_currency(commission)} commission)")
+                else:
+                    net_proceeds = trade_value - commission
+                    st.info(f"💰 Net Proceeds: {format_currency(net_proceeds)} ({format_currency(trade_value)} - {format_currency(commission)} commission)")
 
         # For Sell trades, offer a Preview button that validates and shows calculations without saving
         col_btn1, col_btn2 = st.columns(2)
@@ -576,9 +654,34 @@ elif page == "Trade Entry":
                 # Process the trade
                 with st.spinner("Processing trade..."):
                     success, message = calculator.process_trade(trade_data)
-                
+
                 if success:
-                    st.success(message)
+                    st.success(f"✅ Trade processed successfully!")
+
+                    # Show trade summary
+                    st.subheader("Trade Summary")
+                    sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
+
+                    with sum_col1:
+                        trade_icon = {"B": "🟢 Buy", "S": "🔴 Sell", "T": "🔄 Transfer"}[trade_type]
+                        st.metric("Type", trade_icon)
+
+                    with sum_col2:
+                        st.metric("Stock", final_symbol)
+
+                    with sum_col3:
+                        st.metric("Shares", f"{int(shares_traded):,}")
+
+                    with sum_col4:
+                        if trade_type == "B":
+                            total = (shares_traded * price_per_share) + commission
+                            st.metric("Total Cost", format_currency(total))
+                        else:
+                            total = (shares_traded * price_per_share) - commission
+                            st.metric("Net Proceeds", format_currency(total))
+
+                    st.info("💡 View updated holdings in 'Consolidated Record'")
+
                     # Clear only after successful processing (do not clear on preview)
                     for k in [
                         "sell_stock_select",
@@ -591,163 +694,343 @@ elif page == "Trade Entry":
                     ]:
                         st.session_state.pop(k, None)
                 else:
-                    st.error(message)
+                    st.error(f"❌ {message}")
 
 # Page 3: Pre-populate Database
 elif page == "Pre-populate Database":
     st.title("Pre-populate Database")
     st.markdown("Add existing stock holdings to the database")
-    
-    with st.form("prepopulate_form", clear_on_submit=True):
-        st.subheader("Existing Holding Details")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Account selection
-            existing_accounts = data_manager.get_accounts()
-            if existing_accounts:
-                account = st.selectbox("Account", existing_accounts)
-            else:
-                account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
-            
-            stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-            # Resolve stock symbol (tries TSX .TO first) and get name
-            resolved_symbol = None
-            resolved_name = None
-            if stock_symbol:
-                resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
-            display_name = resolved_name or (stock_symbol if stock_symbol else "")
-            if display_name:
-                st.caption(f"Name: {display_name}")
-                if resolved_symbol and resolved_symbol != stock_symbol:
-                    st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
-            quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
-        
-        with col2:
-            book_cost = st.number_input("Book Cost ($)", min_value=0.0, step=0.01, format="%.2f")
-            acquisition_date = st.date_input("Date of Acquisition")
-            
-            # Show calculated cost per share
-            if quantity and quantity > 0 and book_cost > 0:
-                cost_per_share = book_cost / int(quantity)
-                st.metric("Cost per Share", format_currency(cost_per_share))
-        
-        submitted = st.form_submit_button("Add Holding", type="primary")
-        
-        if submitted:
-            # Validation
-            if not account.strip():
-                st.error("Please enter an account name.")
-            elif not stock_symbol.strip():
-                st.error("Please enter a stock symbol.")
-            elif quantity < 1:
-                st.error("Quantity must be at least 1.")
-            elif book_cost <= 0:
-                st.error("Book cost must be greater than 0.")
-            else:
-                # Use resolved symbol (with .TO if TSX), otherwise use the entered symbol
-                final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
-                final_name = resolved_name or stock_symbol
-                
-                # Prepare holding data
-                holding_data = {
-                    'Account': account.strip(),
-                    'StockName': final_name.strip(),
-                    'StockSymbol': final_symbol.strip(),
-                    'Quantity': int(quantity),
-                    'BookCost': book_cost,
-                    'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
-                }
-                
-                # Add the holding
-                with st.spinner("Adding holding..."):
-                    success, message = calculator.add_existing_holding(holding_data)
-                
-                if success:
-                    st.success("Holding added successfully.")
-                    st.text(message)
+
+    # Add tabs for single entry vs bulk upload
+    tab1, tab2 = st.tabs(["Single Entry", "Bulk Upload (CSV)"])
+
+    with tab1:
+        with st.form("prepopulate_form", clear_on_submit=True):
+            st.subheader("Existing Holding Details")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Account selection
+                existing_accounts = data_manager.get_accounts()
+                if existing_accounts:
+                    account = st.selectbox("Account", existing_accounts, help="Select the account where this stock is held")
                 else:
-                    st.error(message)
+                    account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal", help="Enter the name of the account")
+
+                stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL", help="Enter the stock ticker symbol").upper()
+                # Resolve stock symbol (tries TSX .TO first) and get name
+                resolved_symbol = None
+                resolved_name = None
+                if stock_symbol:
+                    resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
+                display_name = resolved_name or (stock_symbol if stock_symbol else "")
+                if display_name:
+                    st.caption(f"📊 {display_name}")
+                    if resolved_symbol and resolved_symbol != stock_symbol:
+                        st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
+                quantity = st.number_input("Quantity", min_value=0, step=1, format="%d", help="Total number of shares you own")
+
+            with col2:
+                book_cost = st.number_input("Book Cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                                           help="Total amount paid for all shares (including commissions)")
+                acquisition_date = st.date_input("Date of Acquisition", help="When you acquired these shares")
+
+                # Show calculated cost per share
+                if quantity and quantity > 0 and book_cost > 0:
+                    cost_per_share = book_cost / int(quantity)
+                    st.metric("Cost per Share", format_currency(cost_per_share), help="Automatically calculated")
+
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn2:
+                submitted = st.form_submit_button("Add Holding", type="primary", use_container_width=True)
+
+            if submitted:
+                # Validation
+                if not account.strip():
+                    st.error("❌ Please enter an account name.")
+                elif not stock_symbol.strip():
+                    st.error("❌ Please enter a stock symbol.")
+                elif quantity < 1:
+                    st.error("❌ Quantity must be at least 1.")
+                elif book_cost <= 0:
+                    st.error("❌ Book cost must be greater than 0.")
+                else:
+                    # Use resolved symbol (with .TO if TSX), otherwise use the entered symbol
+                    final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
+                    final_name = resolved_name or stock_symbol
+
+                    # Prepare holding data
+                    holding_data = {
+                        'Account': account.strip(),
+                        'StockName': final_name.strip(),
+                        'StockSymbol': final_symbol.strip(),
+                        'Quantity': int(quantity),
+                        'BookCost': book_cost,
+                        'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
+                    }
+
+                    # Add the holding
+                    with st.spinner("Adding holding..."):
+                        success, message = calculator.add_existing_holding(holding_data)
+
+                    if success:
+                        # Show success with summary
+                        st.success("✅ Holding added successfully!")
+
+                        # Display summary in a nice format
+                        summary_col1, summary_col2, summary_col3 = st.columns(3)
+                        with summary_col1:
+                            st.metric("Stock", f"{final_symbol}")
+                        with summary_col2:
+                            st.metric("Shares", f"{quantity:,}")
+                        with summary_col3:
+                            st.metric("Avg Cost", format_currency(cost_per_share))
+
+                        st.info(f"💡 View your holding in the 'Consolidated Record' page")
+                    else:
+                        st.error(f"❌ {message}")
+
+    with tab2:
+        st.subheader("Bulk Upload via CSV")
+        st.markdown("Upload multiple holdings at once using a CSV file")
+
+        # Show template format
+        with st.expander("📋 CSV Format & Template"):
+            st.markdown("""
+            Your CSV file should have the following columns (in this order):
+            - **Account**: Account name (e.g., TFSA, RRSP)
+            - **StockSymbol**: Stock ticker symbol (e.g., AAPL, TD)
+            - **Quantity**: Number of shares (integer)
+            - **BookCost**: Total cost paid for all shares
+            - **DateOfAcquisition**: Date acquired (YYYY-MM-DD format)
+            """)
+
+            # Create sample CSV
+            sample_data = """Account,StockSymbol,Quantity,BookCost,DateOfAcquisition
+TFSA,AAPL,100,15000.00,2023-01-15
+RRSP,TD,50,4250.00,2023-03-20
+Personal,MSFT,75,25500.00,2023-06-10"""
+
+            st.download_button(
+                label="📥 Download CSV Template",
+                data=sample_data,
+                file_name="holdings_template.csv",
+                mime="text/csv"
+            )
+
+        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'], help="Upload a CSV file with your holdings")
+
+        if uploaded_file is not None:
+            try:
+                import io
+                df_upload = pd.read_csv(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
+
+                # Show preview
+                st.write("Preview of uploaded data:")
+                st.dataframe(df_upload, use_container_width=True)
+
+                if st.button("Import Holdings", type="primary"):
+                    success_count = 0
+                    error_count = 0
+                    errors = []
+
+                    with st.spinner(f"Importing {len(df_upload)} holdings..."):
+                        for idx, row in df_upload.iterrows():
+                            try:
+                                # Resolve symbol
+                                resolved_symbol, resolved_name = resolve_stock_symbol(str(row['StockSymbol']).strip())
+                                final_symbol = resolved_symbol if resolved_symbol else str(row['StockSymbol']).strip()
+                                final_name = resolved_name or str(row['StockSymbol']).strip()
+
+                                holding_data = {
+                                    'Account': str(row['Account']).strip(),
+                                    'StockName': final_name,
+                                    'StockSymbol': final_symbol,
+                                    'Quantity': int(row['Quantity']),
+                                    'BookCost': float(row['BookCost']),
+                                    'DateOfAcquisition': str(row['DateOfAcquisition']).strip()
+                                }
+
+                                success, message = calculator.add_existing_holding(holding_data)
+                                if success:
+                                    success_count += 1
+                                else:
+                                    error_count += 1
+                                    errors.append(f"Row {idx + 2}: {message}")
+                            except Exception as e:
+                                error_count += 1
+                                errors.append(f"Row {idx + 2}: {str(e)}")
+
+                    # Show results
+                    if success_count > 0:
+                        st.success(f"✅ Successfully imported {success_count} holdings!")
+                    if error_count > 0:
+                        st.error(f"❌ Failed to import {error_count} holdings")
+                        with st.expander("View errors"):
+                            for error in errors:
+                                st.text(error)
+
+            except Exception as e:
+                st.error(f"❌ Error reading CSV file: {str(e)}")
+                st.info("Please ensure your CSV matches the template format")
 
 # Page 4: Trade History
 elif page == "Trade History":
     st.title("Trade History")
     st.markdown("View all recorded trades")
-    
+
     # Load trades data
     df = data_manager.read_trades()
-    
+
     if df.empty:
-        st.info("No trades found. Use 'Trade Entry' to record trades.")
+        st.info("💡 No trades found. Use 'Trade Entry' to record trades.")
     else:
+        # Convert dates for filtering
+        df['DateOfTrade'] = pd.to_datetime(df['DateOfTrade'])
+
         # Filters
         st.subheader("Filters")
-        col1, col2, col3 = st.columns(3)
-        
+        col1, col2, col3, col4 = st.columns(4)
+
         with col1:
             accounts = ['All'] + data_manager.get_accounts()
-            selected_account = st.selectbox("Filter by Account", accounts, key="history_account")
-        
+            selected_account = st.selectbox("Account", accounts, key="history_account")
+
         with col2:
             symbols = ['All'] + data_manager.get_stock_symbols()
-            selected_symbol = st.selectbox("Filter by Stock Symbol", symbols, key="history_symbol")
-        
+            selected_symbol = st.selectbox("Stock Symbol", symbols, key="history_symbol")
+
         with col3:
             trade_types = ['All', 'B', 'S', 'T']
-            selected_type = st.selectbox("Filter by Trade Type", trade_types, 
-                                       format_func=lambda x: {"All": "All", "B": "Buy", "S": "Sell", "T": "Transfer"}[x])
-        
+            selected_type = st.selectbox("Trade Type", trade_types,
+                                       format_func=lambda x: {"All": "All", "B": "🟢 Buy", "S": "🔴 Sell", "T": "🔄 Transfer"}[x])
+
+        with col4:
+            # Quick date range presets
+            date_range_options = ['All Time', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'This Year', 'Custom']
+            date_range = st.selectbox("Date Range", date_range_options)
+
+        # Custom date range inputs
+        start_date = None
+        end_date = None
+        if date_range == 'Custom':
+            col_date1, col_date2 = st.columns(2)
+            with col_date1:
+                start_date = st.date_input("Start Date", value=date.today() - timedelta(days=30))
+            with col_date2:
+                end_date = st.date_input("End Date", value=date.today())
+
+        # Export button
+        col_export1, col_export2 = st.columns([4, 1])
+        with col_export2:
+            csv = df.to_csv(index=False)
+            st.download_button(
+                label="📥 Export",
+                data=csv,
+                file_name=f"trade_history_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        st.divider()
+
         # Apply filters
         filtered_df = df.copy()
+
+        # Account filter
         if selected_account != 'All':
             filtered_df = filtered_df[filtered_df['Account'] == selected_account]
+
+        # Symbol filter
         if selected_symbol != 'All':
             filtered_df = filtered_df[filtered_df['StockSymbol'] == selected_symbol]
+
+        # Trade type filter
         if selected_type != 'All':
             filtered_df = filtered_df[filtered_df['TradeType'] == selected_type]
+
+        # Date range filter
+        if date_range == 'Last 7 Days':
+            cutoff_date = datetime.now() - timedelta(days=7)
+            filtered_df = filtered_df[filtered_df['DateOfTrade'] >= cutoff_date]
+        elif date_range == 'Last 30 Days':
+            cutoff_date = datetime.now() - timedelta(days=30)
+            filtered_df = filtered_df[filtered_df['DateOfTrade'] >= cutoff_date]
+        elif date_range == 'Last 90 Days':
+            cutoff_date = datetime.now() - timedelta(days=90)
+            filtered_df = filtered_df[filtered_df['DateOfTrade'] >= cutoff_date]
+        elif date_range == 'This Year':
+            cutoff_date = datetime(datetime.now().year, 1, 1)
+            filtered_df = filtered_df[filtered_df['DateOfTrade'] >= cutoff_date]
+        elif date_range == 'Custom' and start_date and end_date:
+            filtered_df = filtered_df[
+                (filtered_df['DateOfTrade'] >= pd.to_datetime(start_date)) &
+                (filtered_df['DateOfTrade'] <= pd.to_datetime(end_date))
+            ]
         
         # Display table
         if not filtered_df.empty:
             # Format the dataframe for display
             display_df = filtered_df.copy()
+
+            # Add icon to trade type
+            def trade_type_with_icon(trade_type):
+                return {"B": "🟢 Buy", "S": "🔴 Sell", "T": "🔄 Transfer"}[trade_type]
+
+            display_df['TradeTypeFormatted'] = display_df['TradeType'].apply(trade_type_with_icon)
             display_df['SharesTraded'] = display_df['SharesTraded'].apply(format_number)
             display_df['PricePerShare'] = display_df['PricePerShare'].apply(format_currency)
             display_df['Commission'] = display_df['Commission'].apply(format_currency)
+
+            # Calculate trade value
+            display_df['TradeValue'] = (display_df['SharesTraded'].apply(lambda x: float(x.replace(',', ''))) *
+                                       display_df['PricePerShare'].apply(lambda x: float(x.replace('$', '').replace(',', '')))).apply(format_currency)
+
             display_df['DateOfTrade'] = pd.to_datetime(display_df['DateOfTrade']).dt.strftime('%Y-%m-%d')
-            
+
             # Rename columns for better display
             display_df = display_df.rename(columns={
-                'Account': 'Account',
-                'StockName': 'Stock Name',
-                'StockSymbol': 'Symbol',
                 'DateOfTrade': 'Date',
-                'TradeType': 'Type',
+                'TradeTypeFormatted': 'Type',
+                'StockSymbol': 'Symbol',
+                'StockName': 'Stock',
                 'SharesTraded': 'Shares',
-                'PricePerShare': 'Price/Share',
-                'Commission': 'Commission'
+                'PricePerShare': 'Price',
+                'Commission': 'Fee',
+                'TradeValue': 'Value',
+                'Account': 'Account'
             })
-            
-            # Format trade type
-            display_df['Type'] = display_df['Type'].map({'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'})
-            
-            st.dataframe(display_df, width='stretch')
+
+            # Select columns to display
+            columns_to_show = ['Date', 'Type', 'Symbol', 'Stock', 'Shares', 'Price', 'Fee', 'Value', 'Account']
+            display_df = display_df[columns_to_show]
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
             
             # Summary statistics
             st.subheader("Summary")
-            col1, col2, col3 = st.columns(3)
-            
+            col1, col2, col3, col4 = st.columns(4)
+
             with col1:
                 total_trades = len(filtered_df)
+                buy_count = len(filtered_df[filtered_df['TradeType'] == 'B'])
+                sell_count = len(filtered_df[filtered_df['TradeType'] == 'S'])
                 st.metric("Total Trades", total_trades)
-            
+                st.caption(f"🟢 {buy_count} Buys | 🔴 {sell_count} Sells")
+
             with col2:
                 total_shares = filtered_df['SharesTraded'].sum()
-                st.metric("Total Shares Traded", format_number(total_shares))
-            
+                st.metric("Total Shares", format_number(total_shares))
+
             with col3:
                 total_commission = filtered_df['Commission'].sum()
-                st.metric("Total Commission", format_currency(total_commission))
+                st.metric("Total Fees", format_currency(total_commission))
+
+            with col4:
+                # Calculate total traded value
+                total_value = (filtered_df['SharesTraded'] * filtered_df['PricePerShare']).sum()
+                st.metric("Total Value", format_currency(total_value))
         else:
             st.info("No trades match the selected filters.")
 
