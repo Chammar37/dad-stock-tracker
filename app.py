@@ -42,17 +42,37 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS for button colors
+st.markdown("""
+<style>
+    /* Green Preview buttons (secondary type) */
+    div[data-testid="column"]:first-child button[kind="secondary"] {
+        background-color: #28a745 !important;
+        color: white !important;
+        font-weight: bold !important;
+        border: none !important;
+    }
+    div[data-testid="column"]:first-child button[kind="secondary"]:hover {
+        background-color: #218838 !important;
+    }
+
+    /* Red Process Trade buttons (primary type) */
+    div[data-testid="column"]:last-child button[kind="primary"] {
+        background-color: #dc3545 !important;
+        color: white !important;
+        border: none !important;
+    }
+    div[data-testid="column"]:last-child button[kind="primary"]:hover {
+        background-color: #c82333 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Initialize data manager and calculator
-@st.cache_resource
-def get_data_manager():
-    return DataManager()
-
-@st.cache_resource
-def get_trade_calculator():
-    return TradeCalculator(get_data_manager())
-
-data_manager = get_data_manager()
-calculator = get_trade_calculator()
+# Note: No caching here because these objects read/write CSV files that change frequently
+# Caching would prevent seeing updates from new trades
+data_manager = DataManager()
+calculator = TradeCalculator(data_manager)
 
 # One-time migration to integerize quantities in CSVs
 try:
@@ -284,13 +304,16 @@ def get_available_stocks_for_sell(account: str = None) -> list:
             name = row['StockName']
             quantity = int(row['Quantity'])
             account_name = row['Account']
-            
+
             # Integer quantity display
             qty_display = f"{quantity:d}"
-            
+
             display_name = f"{symbol} - {name} ({qty_display} shares in {account_name})"
             available_stocks.append((symbol, display_name, quantity))
-        
+
+        # Sort by stock symbol in ascending order (A → Z)
+        available_stocks.sort(key=lambda x: x[0])
+
         return available_stocks
     except:
         return []
@@ -348,12 +371,19 @@ if page == "Consolidated Record":
         if not filtered_df.empty:
             # Format the dataframe for display
             display_df = filtered_df.copy()
+
+            # Add row numbers starting from 1
+            display_df.insert(0, '#', range(1, len(display_df) + 1))
+
             display_df['Quantity'] = display_df['Quantity'].apply(format_number)
             display_df['AveragePricePerShare'] = display_df['AveragePricePerShare'].apply(format_currency)
             display_df['CapitalGainLoss'] = display_df['CapitalGainLoss'].apply(format_currency)
-            display_df['DateOfAcquisition'] = pd.to_datetime(display_df['DateOfAcquisition']).dt.strftime('%Y-%m-%d')
-            
-            # Rename columns for better display
+            # Handle empty dates - show blank instead of NaT
+            display_df['DateOfAcquisition'] = pd.to_datetime(display_df['DateOfAcquisition'], errors='coerce').apply(
+                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''
+            )
+
+            # Rename columns for better display (# column already named)
             display_df = display_df.rename(columns={
                 'Account': 'Account',
                 'StockName': 'Stock Name',
@@ -363,7 +393,7 @@ if page == "Consolidated Record":
                 'CapitalGainLoss': 'Gain/Loss',
                 'DateOfAcquisition': 'Date Acquired'
             })
-            
+
             st.dataframe(display_df, width='stretch')
         else:
             st.info("No holdings match the selected filters.")
@@ -372,7 +402,12 @@ if page == "Consolidated Record":
 elif page == "Trade Entry":
     st.title("Trade Entry")
     st.markdown("Record new stock trades")
-    
+
+    # Display success message if one was stored from previous submission
+    if "trade_success_message" in st.session_state:
+        st.success(st.session_state.trade_success_message)
+        del st.session_state.trade_success_message
+
     # Get existing accounts for dropdown
     existing_accounts = data_manager.get_accounts()
     
@@ -424,9 +459,9 @@ elif page == "Trade Entry":
                                 stock_name = display.split(" - ")[1].split(" (")[0]
                                 max_quantity = int(quantity)
                                 break
-                        
-                        # Show available quantity
-                        st.info(f"Available: {max_quantity:d} shares")
+
+                        # Visual grouping: Show Name/Symbol with available quantity
+                        st.markdown(f"**📊 {stock_symbol} - {stock_name} ({max_quantity:d} shares available)**")
                     else:
                         stock_symbol = ""
                         stock_name = ""
@@ -441,13 +476,19 @@ elif page == "Trade Entry":
                 # Resolve stock symbol (tries TSX .TO first) and get name
                 if stock_symbol:
                     resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
-                display_name = resolved_name or (stock_symbol if stock_symbol else "")
-                if display_name:
-                    st.caption(f"Name: {display_name}")
-                    if resolved_symbol and resolved_symbol != stock_symbol:
-                        st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
+
+                    # Visual grouping: Show Name/Symbol/Avg Price summary
+                    if resolved_name:
+                        final_symbol = resolved_symbol if resolved_symbol else stock_symbol
+                        record = data_manager.get_consolidated_record(account if account else "", final_symbol)
+                        avg_price_display = ""
+                        if record:
+                            avg_price = float(record['AveragePricePerShare'])
+                            avg_price_display = f" @ {format_currency(avg_price)}/share (current avg)"
+
+                        st.markdown(f"**📊 {final_symbol} - {resolved_name}{avg_price_display}**")
                 max_quantity = None  # No limit for buying
-            
+
             trade_date = st.date_input("Date of Trade", value=date.today())
         
         with col2:
@@ -475,20 +516,21 @@ elif page == "Trade Entry":
             price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
             commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99)
 
-        # For Sell trades, offer a Preview button that validates and shows calculations without saving
+        # Preview and Process buttons for Buy and Sell trades
         col_btn1, col_btn2 = st.columns(2)
         preview_submitted = False
         with col_btn1:
-            if trade_type == "S":
+            if trade_type in ["B", "S"]:
+                preview_help = "Preview calculations without saving" if trade_type == "B" else "Validate and preview this sell without saving"
                 preview_submitted = st.form_submit_button(
                     "Preview Trade",
                     type="secondary",
-                    help="Validate and preview this sell without saving"
+                    help=preview_help
                 )
         with col_btn2:
             submitted = st.form_submit_button("Process Trade", type="primary")
         
-        # Handle preview for Sell without persisting
+        # Handle preview for Buy and Sell without persisting
         if preview_submitted:
             # shares_traded already has the correct value from the widget
             try:
@@ -496,41 +538,74 @@ elif page == "Trade Entry":
             except (ValueError, TypeError):
                 shares_traded = 1
                 st.warning("Invalid input for number of shares. Setting shares traded to 1.")
+
+            # Common validation
             if not account.strip():
                 st.error("Please enter an account name.")
-            elif not stock_symbol.strip():
+            elif trade_type == "B" and (not stock_symbol.strip()):
+                st.error("Please enter a stock symbol for buying.")
+            elif trade_type == "S" and (not stock_symbol.strip()):
                 st.error("Please select a stock to sell.")
             elif shares_traded < 1:
                 st.error(f"Shares traded must be at least 1. You entered: {shares_traded}")
-            elif max_quantity is None or shares_traded > int(max_quantity):
-                st.error(f"Cannot sell more than {int(max_quantity) if max_quantity is not None else 0} shares.")
             elif price_per_share <= 0:
                 st.error("Price per share must be greater than 0.")
+            elif trade_type == "S" and (max_quantity is None or shares_traded > int(max_quantity)):
+                st.error(f"Cannot sell more than {int(max_quantity) if max_quantity is not None else 0} shares.")
             else:
-                # Fetch existing holding and compute preview values
-                record = data_manager.get_consolidated_record(account.strip(), stock_symbol.strip())
-                if not record:
-                    st.error(f"No existing holdings found for {stock_symbol} in {account}")
-                else:
-                    current_quantity = int(record['Quantity'])
-                    current_avg_price = float(record['AveragePricePerShare'])
-                    current_capital_gain_loss = float(record.get('CapitalGainLoss', 0))
-                    if shares_traded > current_quantity:
-                        st.error(f"Insufficient shares. You have {current_quantity}, trying to sell {shares_traded}")
+                # BUY PREVIEW
+                if trade_type == "B":
+                    # Use resolved symbol for buy trades
+                    final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
+
+                    # Use calculator's preview function
+                    try:
+                        preview = calculator.preview_buy_trade(
+                            account=account.strip(),
+                            stock_symbol=final_symbol,
+                            shares_traded=shares_traded,
+                            price_per_share=float(price_per_share),
+                            commission=float(commission)
+                        )
+
+                        # Display preview in success box
+                        st.success("✅ Preview - Buy Trade")
+                        col_a, col_b, col_c, col_d = st.columns(4)
+                        with col_a:
+                            st.metric("Total Cost of Trade", format_currency(preview['cost_of_trade']))
+                        with col_b:
+                            st.metric("New Total Shares", f"{preview['new_quantity']:,}")
+                        with col_c:
+                            st.metric("New Avg Price/Share", format_currency(preview['new_avg_price']))
+                        with col_d:
+                            st.metric("New Book Value", format_currency(preview['new_book_value']))
+                    except Exception as e:
+                        st.error(f"Error calculating preview: {str(e)}")
+
+                # SELL PREVIEW
+                elif trade_type == "S":
+                    # Use calculator's preview function
+                    success, preview, error = calculator.preview_sell_trade(
+                        account=account.strip(),
+                        stock_symbol=stock_symbol.strip(),
+                        shares_traded=shares_traded,
+                        price_per_share=float(price_per_share),
+                        commission=float(commission)
+                    )
+
+                    if not success:
+                        st.error(error)
                     else:
-                        net_proceeds = (shares_traded * float(price_per_share)) - float(commission)
-                        trade_capital_gain_loss = net_proceeds - (shares_traded * current_avg_price)
-                        new_quantity = current_quantity - shares_traded
-                        new_capital_gain_loss = current_capital_gain_loss + trade_capital_gain_loss
-                        st.subheader("Preview")
+                        # Display preview in success box
+                        st.success("✅ Preview - Sell Trade")
                         col_a, col_b, col_c = st.columns(3)
                         with col_a:
-                            st.metric("Net Proceeds", format_currency(net_proceeds))
+                            st.metric("Net Proceeds", format_currency(preview['net_proceeds']))
                         with col_b:
-                            st.metric("Trade Gain/Loss", format_currency(trade_capital_gain_loss))
+                            st.metric("Trade Gain/Loss", format_currency(preview['trade_gain_loss']))
                         with col_c:
-                            st.metric("Remaining Quantity", f"{new_quantity}")
-                        st.caption(f"Total Gain/Loss after trade: {format_currency(new_capital_gain_loss)}")
+                            st.metric("Remaining Quantity", f"{preview['new_quantity']}")
+                        st.caption(f"Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
 
         if submitted:
             # shares_traded already has the correct value from the widget
@@ -538,7 +613,7 @@ elif page == "Trade Entry":
                 shares_traded = int(shares_traded)
             except (ValueError, TypeError):
                 shares_traded = 1
-            
+
             # Validation with better error handling
             if not account.strip():
                 st.error("Please enter an account name.")
@@ -546,6 +621,8 @@ elif page == "Trade Entry":
                 st.error("Please select a stock to sell/transfer.")
             elif trade_type == "B" and (not stock_symbol.strip()):
                 st.error("Please enter a stock symbol for buying.")
+            elif not trade_date:
+                st.error("Please select a valid trade date.")
             elif shares_traded < 1:
                 st.error(f"Shares traded must be at least 1. You entered: {shares_traded}")
             elif trade_type in ["S", "T"] and max_quantity is not None and shares_traded > int(max_quantity):
@@ -576,20 +653,18 @@ elif page == "Trade Entry":
                 # Process the trade
                 with st.spinner("Processing trade..."):
                     success, message = calculator.process_trade(trade_data)
-                
+
                 if success:
-                    st.success(message)
+                    # Store success message in session state to show after rerun
+                    st.session_state.trade_success_message = f"✅ {message}"
                     # Clear only after successful processing (do not clear on preview)
                     for k in [
                         "sell_stock_select",
-                        "Stock Name",
-                        "Stock Symbol",
-                        "Shares Traded",
-                        "Price per Share ($)",
-                        "Commission ($)",
-                        "Date of Trade",
+                        "shares_input",
                     ]:
                         st.session_state.pop(k, None)
+                    # Force page refresh to clear form
+                    st.rerun()
                 else:
                     st.error(message)
 
@@ -617,21 +692,22 @@ elif page == "Pre-populate Database":
             resolved_name = None
             if stock_symbol:
                 resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
-            display_name = resolved_name or (stock_symbol if stock_symbol else "")
-            if display_name:
-                st.caption(f"Name: {display_name}")
-                if resolved_symbol and resolved_symbol != stock_symbol:
-                    st.caption(f"Symbol: {resolved_symbol} (resolved from {stock_symbol})")
+
             quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
-        
+
         with col2:
             book_cost = st.number_input("Book Cost ($)", min_value=0.0, step=0.01, format="%.2f")
             acquisition_date = st.date_input("Date of Acquisition")
-            
-            # Show calculated cost per share
+
+        # Visual grouping: Show Name/Symbol/Cost summary after symbol resolution
+        if stock_symbol and resolved_name:
+            final_symbol = resolved_symbol if resolved_symbol else stock_symbol
+            cost_per_share_display = ""
             if quantity and quantity > 0 and book_cost > 0:
                 cost_per_share = book_cost / int(quantity)
-                st.metric("Cost per Share", format_currency(cost_per_share))
+                cost_per_share_display = f" @ {format_currency(cost_per_share)}/share"
+
+            st.markdown(f"**📊 {final_symbol} - {resolved_name}{cost_per_share_display}**")
         
         submitted = st.form_submit_button("Add Holding", type="primary")
         
@@ -641,6 +717,8 @@ elif page == "Pre-populate Database":
                 st.error("Please enter an account name.")
             elif not stock_symbol.strip():
                 st.error("Please enter a stock symbol.")
+            elif not acquisition_date:
+                st.error("Please select a valid acquisition date.")
             elif quantity < 1:
                 st.error("Quantity must be at least 1.")
             elif book_cost <= 0:
@@ -663,10 +741,10 @@ elif page == "Pre-populate Database":
                 # Add the holding
                 with st.spinner("Adding holding..."):
                     success, message = calculator.add_existing_holding(holding_data)
-                
+
                 if success:
-                    st.success("Holding added successfully.")
-                    st.text(message)
+                    # Show detailed success message
+                    st.success(f"✅ Holding added successfully! {message}")
                 else:
                     st.error(message)
 
@@ -674,30 +752,35 @@ elif page == "Pre-populate Database":
 elif page == "Trade History":
     st.title("Trade History")
     st.markdown("View all recorded trades")
-    
+
+    # Display success message if one was stored from previous action
+    if "history_success_message" in st.session_state:
+        st.success(st.session_state.history_success_message)
+        del st.session_state.history_success_message
+
     # Load trades data
     df = data_manager.read_trades()
-    
+
     if df.empty:
         st.info("No trades found. Use 'Trade Entry' to record trades.")
     else:
         # Filters
         st.subheader("Filters")
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
             accounts = ['All'] + data_manager.get_accounts()
             selected_account = st.selectbox("Filter by Account", accounts, key="history_account")
-        
+
         with col2:
             symbols = ['All'] + data_manager.get_stock_symbols()
             selected_symbol = st.selectbox("Filter by Stock Symbol", symbols, key="history_symbol")
-        
+
         with col3:
             trade_types = ['All', 'B', 'S', 'T']
-            selected_type = st.selectbox("Filter by Trade Type", trade_types, 
+            selected_type = st.selectbox("Filter by Trade Type", trade_types,
                                        format_func=lambda x: {"All": "All", "B": "Buy", "S": "Sell", "T": "Transfer"}[x])
-        
+
         # Apply filters
         filtered_df = df.copy()
         if selected_account != 'All':
@@ -706,16 +789,45 @@ elif page == "Trade History":
             filtered_df = filtered_df[filtered_df['StockSymbol'] == selected_symbol]
         if selected_type != 'All':
             filtered_df = filtered_df[filtered_df['TradeType'] == selected_type]
-        
+
         # Display table
         if not filtered_df.empty:
             # Format the dataframe for display
             display_df = filtered_df.copy()
+
+            # Calculate Capital Gain/Loss for each trade
+            def calculate_trade_gain_loss(row):
+                """Calculate gain/loss for a single trade row."""
+                if row['TradeType'] == 'S':  # Sell trade only
+                    try:
+                        shares = int(row['SharesTraded'])
+                        price = float(row['PricePerShare'])
+                        commission = float(row['Commission'])
+                        net_proceeds = (shares * price) - commission
+
+                        # Get current avg cost from consolidated (limitation: not historical)
+                        record = data_manager.get_consolidated_record(row['Account'], row['StockSymbol'])
+                        if record:
+                            avg_cost = float(record['AveragePricePerShare'])
+                            cost_basis = shares * avg_cost
+                            gain_loss = net_proceeds - cost_basis
+                            return gain_loss
+                    except:
+                        pass
+                return None
+
+            display_df['CapitalGainLoss'] = display_df.apply(calculate_trade_gain_loss, axis=1)
+
+            # Format columns
             display_df['SharesTraded'] = display_df['SharesTraded'].apply(format_number)
             display_df['PricePerShare'] = display_df['PricePerShare'].apply(format_currency)
+            display_df['CapitalGainLoss'] = display_df['CapitalGainLoss'].apply(lambda x: format_currency(x) if x is not None else '-')
             display_df['Commission'] = display_df['Commission'].apply(format_currency)
-            display_df['DateOfTrade'] = pd.to_datetime(display_df['DateOfTrade']).dt.strftime('%Y-%m-%d')
-            
+            # Handle empty dates - show blank instead of 'No Date'
+            display_df['DateOfTrade'] = pd.to_datetime(display_df['DateOfTrade'], errors='coerce').apply(
+                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''
+            )
+
             # Rename columns for better display
             display_df = display_df.rename(columns={
                 'Account': 'Account',
@@ -725,26 +837,64 @@ elif page == "Trade History":
                 'TradeType': 'Type',
                 'SharesTraded': 'Shares',
                 'PricePerShare': 'Price/Share',
+                'CapitalGainLoss': 'Gain/Loss',
                 'Commission': 'Commission'
             })
-            
+
             # Format trade type
             display_df['Type'] = display_df['Type'].map({'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'})
-            
+
             st.dataframe(display_df, width='stretch')
-            
+
+            # Delete trade section
+            st.subheader("Delete Trade")
+            st.info("ℹ️ Deleting a trade will automatically recalculate your consolidated holdings by replaying all remaining trades in order. This ensures 100% accurate calculations.")
+
+            # Create a dropdown with trade descriptions
+            trade_options = []
+            for idx in filtered_df.index:
+                row = df.loc[idx]
+                # Handle empty dates gracefully
+                date_val = pd.to_datetime(row['DateOfTrade'], errors='coerce')
+                trade_date = date_val.strftime('%Y-%m-%d') if pd.notna(date_val) else '-'
+                trade_type_full = {'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'}.get(row['TradeType'], row['TradeType'])
+                description = f"#{idx} | {trade_date} | {trade_type_full} | {row['StockSymbol']} | {int(row['SharesTraded'])} shares @ ${row['PricePerShare']:.2f}"
+                trade_options.append((idx, description))
+
+            if trade_options:
+                selected_trade = st.selectbox(
+                    "Select trade to delete",
+                    options=[None] + trade_options,
+                    format_func=lambda x: "Select a trade..." if x is None else x[1],
+                    key="delete_trade_select"
+                )
+
+                if selected_trade is not None:
+                    col1, col2 = st.columns([1, 4])
+                    with col1:
+                        if st.button("Delete Trade", type="primary"):
+                            trade_idx = selected_trade[0]
+                            with st.spinner("Deleting trade and rebuilding holdings..."):
+                                success, message = calculator.delete_trade_and_rebuild(trade_idx)
+                            if success:
+                                # Store success message to show after rerun
+                                st.session_state.history_success_message = f"✅ {message}"
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {message}")
+
             # Summary statistics
             st.subheader("Summary")
             col1, col2, col3 = st.columns(3)
-            
+
             with col1:
                 total_trades = len(filtered_df)
                 st.metric("Total Trades", total_trades)
-            
+
             with col2:
                 total_shares = filtered_df['SharesTraded'].sum()
                 st.metric("Total Shares Traded", format_number(total_shares))
-            
+
             with col3:
                 total_commission = filtered_df['Commission'].sum()
                 st.metric("Total Commission", format_currency(total_commission))

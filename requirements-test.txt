@@ -1,0 +1,16 @@
+# Testing requirements for stock-tracker
+
+# Core testing framework
+pytest>=8.0.0
+pytest-cov>=4.1.0  # Coverage reporting
+pytest-xdist>=3.5.0  # Parallel test execution
+
+# Test utilities
+pytest-mock>=3.12.0  # Mocking support
+freezegun>=1.4.0  # Time/date mocking
+
+# Main application dependencies (needed for testing)
+pandas>=2.1.0
+streamlit>=1.30.0
+yfinance>=0.2.35
+plotly>=5.18.0

@@ -2,6 +2,7 @@ import pandas as pd
 import os
 from typing import Dict, List, Optional
 import streamlit as st
+from datetime import datetime
 
 class DataManager:
     """Handles all CSV file operations for the stock tracker app."""
@@ -93,6 +94,11 @@ class DataManager:
     def add_trade(self, trade_data: Dict) -> bool:
         """Add a new trade to the trades CSV."""
         try:
+            # Validate that DateOfTrade exists and is not empty
+            if 'DateOfTrade' not in trade_data or not trade_data['DateOfTrade']:
+                st.error("Trade date is required and cannot be empty")
+                return False
+
             trades_df = self.read_trades()
             new_trade = pd.DataFrame([trade_data])
             updated_trades = pd.concat([trades_df, new_trade], ignore_index=True)
@@ -100,16 +106,74 @@ class DataManager:
         except Exception as e:
             st.error(f"Error adding trade: {e}")
             return False
+
+    def delete_trade(self, trade_index: int) -> bool:
+        """Delete a trade by its index in the trades CSV."""
+        try:
+            trades_df = self.read_trades()
+            if trade_index < 0 or trade_index >= len(trades_df):
+                st.error(f"Invalid trade index: {trade_index}")
+                return False
+
+            # Remove the trade at the specified index
+            updated_trades = trades_df.drop(index=trade_index).reset_index(drop=True)
+            return self.write_trades(updated_trades)
+        except Exception as e:
+            st.error(f"Error deleting trade: {e}")
+            return False
+
+    def get_trade_at_index(self, trade_index: int) -> Optional[Dict]:
+        """Get a trade by its index."""
+        try:
+            trades_df = self.read_trades()
+            if trade_index < 0 or trade_index >= len(trades_df):
+                return None
+            return trades_df.loc[trade_index].to_dict()
+        except Exception as e:
+            st.error(f"Error getting trade: {e}")
+            return None
+
+    def delete_consolidated_record(self, account: str, stock_symbol: str) -> bool:
+        """Delete a specific consolidated record."""
+        try:
+            df = self.read_consolidated()
+            mask = (df['Account'] == account) & (df['StockSymbol'] == stock_symbol)
+            updated_df = df[~mask]  # Keep everything except this record
+            return self.write_consolidated(updated_df)
+        except Exception as e:
+            st.error(f"Error deleting consolidated record: {e}")
+            return False
+
+    def get_trades_for_account_symbol(self, account: str, stock_symbol: str) -> pd.DataFrame:
+        """Get all trades for a specific account and stock symbol, sorted by date."""
+        try:
+            trades_df = self.read_trades()
+            mask = (trades_df['Account'] == account) & (trades_df['StockSymbol'] == stock_symbol)
+            relevant_trades = trades_df[mask].copy()
+
+            # Sort by date (oldest first)
+            if not relevant_trades.empty and 'DateOfTrade' in relevant_trades.columns:
+                relevant_trades = relevant_trades.sort_values('DateOfTrade')
+
+            return relevant_trades
+        except Exception as e:
+            st.error(f"Error getting trades for account/symbol: {e}")
+            return pd.DataFrame()
     
-    def update_consolidated_record(self, account: str, stock_symbol: str, 
+    def update_consolidated_record(self, account: str, stock_symbol: str,
                                  updated_data: Dict) -> bool:
         """Update a specific consolidated record."""
         try:
+            # Validate that DateOfAcquisition exists and is not empty
+            if 'DateOfAcquisition' in updated_data and not updated_data['DateOfAcquisition']:
+                st.error("Date of acquisition is required and cannot be empty")
+                return False
+
             df = self.read_consolidated()
-            
+
             # Find the record to update
             mask = (df['Account'] == account) & (df['StockSymbol'] == stock_symbol)
-            
+
             if mask.any():
                 # Update existing record
                 for key, value in updated_data.items():
@@ -123,7 +187,7 @@ class DataManager:
                 }
                 new_df = pd.DataFrame([new_record])
                 df = pd.concat([df, new_df], ignore_index=True)
-            
+
             return self.write_consolidated(df)
         except Exception as e:
             st.error(f"Error updating consolidated record: {e}")
@@ -159,3 +223,30 @@ class DataManager:
         except Exception as e:
             st.error(f"Error getting stock symbols: {e}")
             return []
+
+    def migrate_integer_quantities(self) -> bool:
+        """
+        One-time migration to ensure all quantities are integers.
+        Converts any float quantities to integers in both consolidated and trades CSVs.
+        """
+        try:
+            # Migrate consolidated.csv
+            consolidated_df = pd.read_csv(self.consolidated_path)
+            if 'Quantity' in consolidated_df.columns:
+                consolidated_df['Quantity'] = pd.to_numeric(
+                    consolidated_df['Quantity'], errors='coerce'
+                ).fillna(0).round().astype(int)
+                consolidated_df.to_csv(self.consolidated_path, index=False)
+
+            # Migrate trades.csv
+            trades_df = pd.read_csv(self.trades_path)
+            if 'SharesTraded' in trades_df.columns:
+                trades_df['SharesTraded'] = pd.to_numeric(
+                    trades_df['SharesTraded'], errors='coerce'
+                ).fillna(0).round().astype(int)
+                trades_df.to_csv(self.trades_path, index=False)
+
+            return True
+        except Exception as e:
+            # Silent fail - this is a one-time migration
+            return False

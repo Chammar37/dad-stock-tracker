@@ -1,7 +1,10 @@
 data/*
 venv/*
-*.pyc
-__pycache__/app.cpython-313.pyc
+**.pyc
+__pycache__/*
 utils/__pycache__/*
-utils/__pycache__/**/*.pyc
+utils/__pycache__/**/*
+
+utils/__pycache__/data_manager.cpython-313.pyc
 utils/__pycache__/calculations.cpython-313.pyc
+utils/__pycache__/__init__.cpython-313.pyc
