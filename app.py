@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import sys
 import os
+import hmac
 import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
@@ -11,7 +12,7 @@ from plotly.subplots import make_subplots
 # Add the utils directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 
-from utils.data_manager import DataManager
+from utils.data_manager_factory import create_data_manager
 from utils.calculations import TradeCalculator
 from utils.ui_helpers import (
     BUTTON_STYLES_CSS,
@@ -64,10 +65,37 @@ st.set_page_config(
 # Custom CSS for button colors
 st.markdown(BUTTON_STYLES_CSS, unsafe_allow_html=True)
 
+
+def get_configured_app_password() -> str | None:
+    try:
+        configured_password = st.secrets.get("auth", {}).get("app_password")
+    except Exception:
+        configured_password = None
+    return configured_password or os.environ.get("STOCK_TRACKER_APP_PASSWORD")
+
+
+def require_app_password():
+    configured_password = get_configured_app_password()
+    if not configured_password or st.session_state.get("authenticated"):
+        return
+
+    st.title("Stock Tracker")
+    password = st.text_input("Password", type="password")
+    if st.button("Sign in"):
+        if hmac.compare_digest(password, configured_password):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Invalid password")
+    st.stop()
+
+
+require_app_password()
+
 # Initialize data manager and calculator
 # Note: No caching here because these objects read/write CSV files that change frequently
 # Caching would prevent seeing updates from new trades
-data_manager = DataManager()
+data_manager = create_data_manager()
 calculator = TradeCalculator(data_manager)
 
 # One-time migration to integerize quantities in CSVs

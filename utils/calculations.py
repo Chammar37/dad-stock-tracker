@@ -3,6 +3,11 @@ import streamlit as st
 from datetime import datetime
 from .data_manager import DataManager
 
+
+class TradePersistenceError(Exception):
+    """Raised to trigger transaction rollback with a user-facing message."""
+
+
 class TradeCalculator:
     """Handles all trade calculations according to the specified formulas."""
     
@@ -254,28 +259,29 @@ class TradeCalculator:
         if not is_valid:
             return False, validation_error
 
-        original_consolidated = self.data_manager.read_consolidated()
+        try:
+            with self.data_manager.transaction():
+                # Then process based on trade type
+                if trade_type == 'B':
+                    trade_data.update(self.enrich_trade_financials(trade_data))
+                    process_success, message = self.process_buy_trade(trade_data)
+                elif trade_type == 'S':
+                    process_success, message = self.process_sell_trade(trade_data)
+                elif trade_type == 'T':
+                    process_success, message = self.process_transfer_trade(trade_data)
+                else:
+                    return False, f"Unknown trade type: {trade_type}. Use B (Buy), S (Sell), or T (Transfer)"
 
-        # Then process based on trade type
-        if trade_type == 'B':
-            trade_data.update(self.enrich_trade_financials(trade_data))
-            process_success, message = self.process_buy_trade(trade_data)
-        elif trade_type == 'S':
-            process_success, message = self.process_sell_trade(trade_data)
-        elif trade_type == 'T':
-            process_success, message = self.process_transfer_trade(trade_data)
-        else:
-            return False, f"Unknown trade type: {trade_type}. Use B (Buy), S (Sell), or T (Transfer)"
+                if not process_success:
+                    raise TradePersistenceError(message)
 
-        if not process_success:
-            return False, message
+                trade_success = self.data_manager.add_trade(trade_data)
+                if not trade_success:
+                    raise TradePersistenceError("Failed to record trade in trade history")
 
-        trade_success = self.data_manager.add_trade(trade_data)
-        if not trade_success:
-            self.data_manager.write_consolidated(original_consolidated)
-            return False, "Failed to record trade in trade history"
-
-        return True, message
+            return True, message
+        except TradePersistenceError as e:
+            return False, str(e)
     
     def add_existing_holding(self, holding_data: Dict) -> Tuple[bool, str]:
         """
@@ -379,19 +385,23 @@ class TradeCalculator:
             account = trade['Account']
             stock_symbol = trade['StockSymbol']
 
-            # Delete the trade from trades.csv
-            delete_success = self.data_manager.delete_trade(trade_index)
-            if not delete_success:
-                return False, "Failed to delete trade from history"
+            with self.data_manager.transaction():
+                # Delete the trade from trade history.
+                delete_success = self.data_manager.delete_trade(trade_index)
+                if not delete_success:
+                    raise TradePersistenceError("Failed to delete trade from history")
 
-            # Rebuild consolidated holdings from remaining trades
-            rebuild_success, rebuild_message = self.rebuild_holdings_from_trades(account, stock_symbol)
+                # Rebuild consolidated holdings from remaining trades.
+                rebuild_success, rebuild_message = self.rebuild_holdings_from_trades(account, stock_symbol)
+                if not rebuild_success:
+                    raise TradePersistenceError(f"Trade deleted but rebuild failed: {rebuild_message}")
 
             if rebuild_success:
                 return True, f"Trade deleted and holdings rebuilt. {rebuild_message}"
-            else:
-                return False, f"Trade deleted but rebuild failed: {rebuild_message}"
+            return False, f"Trade deleted but rebuild failed: {rebuild_message}"
 
+        except TradePersistenceError as e:
+            return False, str(e)
         except Exception as e:
             return False, f"Error deleting trade and rebuilding: {str(e)}"
 
