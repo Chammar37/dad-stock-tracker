@@ -10,13 +10,13 @@ Make stock entry consistent for Buy and Sell trades, with the symbol as the prim
 
 ### To Do
 
-- [ ] For an existing account and symbol, allow symbol-only entry.
-- [ ] Reuse the existing consolidated stock name automatically.
-- [ ] For a new symbol, allow or require a stock name.
-- [ ] Make the Sell dropdown store the symbol as its value instead of parsing the display label.
-- [ ] Keep Sell options limited to the selected account and positive quantities.
-- [ ] Keep Sell options sorted by symbol ascending.
-- [ ] Resolve and store canonical symbols consistently, including exchange suffixes.
+- [x] For an existing account and symbol, allow symbol-only entry.
+- [x] Reuse the existing consolidated stock name automatically.
+- [x] For a new symbol, allow or require a stock name.
+- [x] Make the Sell dropdown store the symbol as its value instead of parsing the display label.
+- [x] Keep Sell options limited to the selected account and positive quantities.
+- [x] Keep Sell options sorted by symbol ascending.
+- [x] Resolve and store canonical symbols consistently, including exchange suffixes.
 
 ### Acceptance Criteria
 
@@ -34,14 +34,14 @@ Make Buy and Sell submission predictable and prevent invalid or duplicate-lookin
 
 ### To Do
 
-- [ ] Fix the Sell quantity state so `0.0` cannot replace the default integer quantity.
-- [ ] Normalize quantity widget state when trade type, account, or selected symbol changes.
-- [ ] Display integer fields as `0`, not `0.00`.
-- [ ] Keep Preview non-persisting.
-- [ ] Validate the trade before adding it to Trade History.
-- [ ] After success, display exactly `Trade Completed`.
-- [ ] Clear all Trade Entry fields after a successful Process Trade.
-- [ ] Preserve entered fields after Preview so the user can review or adjust them.
+- [x] Fix the Sell quantity state so `0.0` cannot replace the default integer quantity.
+- [x] Normalize quantity widget state when trade type, account, or selected symbol changes.
+- [x] Display integer fields as `0`, not `0.00`.
+- [x] Keep Preview non-persisting.
+- [x] Validate the trade before adding it to Trade History.
+- [x] After success, display exactly `Trade Completed`.
+- [x] Clear all Trade Entry fields after a successful Process Trade.
+- [x] Preserve entered fields after Preview so the user can review or adjust them.
 
 ### Acceptance Criteria
 
@@ -59,11 +59,12 @@ Make the calculated cost/share visible and confirmable before an existing holdin
 
 ### To Do
 
-- [ ] Keep Name, Symbol, and Cost/share together in a bold summary.
-- [ ] Calculate Cost/share as `Book Cost / Quantity`.
-- [ ] Update the summary as Quantity or Book Cost changes.
+- [x] Keep Name, Symbol, and Cost/share together in a bold summary.
+- [x] Calculate Cost/share as `Book Cost / Quantity`.
+- [x] Update the summary as Quantity or Book Cost changes.
 - [ ] Add an explicit confirmation control if the client requires an approval action.
-- [ ] Validate account, symbol, quantity, book cost, and acquisition date.
+- [x] Validate account, symbol, quantity, book cost, and acquisition date.
+- [x] Existing account selection and new-account entry both work.
 
 ### Acceptance Criteria
 
@@ -80,11 +81,11 @@ Allow users to correct and remove consolidated records safely.
 
 ### To Do
 
-- [ ] Add Edit controls to the Consolidated Record view.
-- [ ] Add Delete controls with confirmation.
-- [ ] Validate edited quantity, average price, gain/loss, symbol, account, and date.
-- [ ] Define how manual edits interact with Trade History rebuilds.
-- [ ] Keep display row numbers one-based and sequential.
+- [x] Add Edit controls to the Consolidated Record view.
+- [x] Add Delete controls with confirmation.
+- [x] Validate edited quantity, average price, gain/loss, symbol, account, and date.
+- [x] Define how manual edits interact with Trade History rebuilds.
+- [x] Keep display row numbers one-based and sequential.
 
 ### Acceptance Criteria
 
@@ -102,13 +103,13 @@ Make Trade History useful for reviewing transaction amounts and historical recor
 
 ### To Do
 
-- [ ] Ensure all new trades save `DateOfTrade`.
-- [ ] Add Cost to the displayed history.
-- [ ] Add Gross Proceeds to the displayed history.
-- [ ] Add Net Proceeds where useful.
+- [x] Ensure all new trades save `DateOfTrade`.
+- [x] Add Cost to the displayed history.
+- [x] Add Gross Proceeds to the displayed history.
+- [x] Add Net Proceeds where useful.
 - [ ] Confirm whether Cost includes commission.
-- [ ] Store average cost at the time of sale for accurate historical gain/loss.
-- [ ] Backfill or explicitly label missing historical dates.
+- [x] Store average cost at the time of sale for accurate historical gain/loss.
+- [ ] Backfill or explicitly label missing historical dates. Blocked on source dates for legacy rows.
 
 ### Acceptance Criteria
 
@@ -133,6 +134,8 @@ Correct legacy records without hiding uncertainty in the source data.
 - [ ] Check for duplicate symbols or account/symbol mismatches.
 - [ ] Add a regression test for the corrected BHC scenario.
 
+Status: blocked on client/source data. Do not fabricate CM/NTR/SIA dates or BHC expected values.
+
 ### Acceptance Criteria
 
 - All corrected dates are traceable to client-provided or trade-history data.
@@ -155,9 +158,9 @@ Correct legacy records without hiding uncertainty in the source data.
 
 ### To Do
 
-- [ ] Run the full test suite after installing `requirements-test.txt`.
-- [ ] Add integration coverage for the new Sell selection state flow.
-- [ ] Add integration coverage for complete form reset after successful submission.
-- [ ] Add tests for consolidated edit/delete behavior.
-- [ ] Add tests for Trade History cost/proceeds and historical average cost.
+- [x] Run the full test suite after installing `requirements-test.txt`.
+- [x] Add integration coverage for the new Sell selection state flow.
+- [ ] Add integration coverage for complete form reset after successful submission. Reset helper coverage added; full Streamlit UI integration still pending.
+- [x] Add tests for consolidated edit/delete behavior.
+- [x] Add tests for Trade History cost/proceeds and historical average cost.
 - [ ] Add data migration tests for legacy missing dates.

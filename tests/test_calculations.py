@@ -172,6 +172,17 @@ class TestSellTradeProcessing:
         expected_total_gain = 982.51
         assert abs(record['CapitalGainLoss'] - expected_total_gain) < 0.01
 
+    def test_process_sell_trade_adds_historical_financial_fields(self, calculator, populated_data_manager, sell_trade_data):
+        """Test selling shares enriches the trade with sale-time cost/proceeds."""
+        success, message = calculator.process_sell_trade(sell_trade_data)
+
+        assert success
+        assert abs(sell_trade_data['GrossProceeds'] - 4375.00) < 0.01
+        assert abs(sell_trade_data['NetProceeds'] - 4365.01) < 0.01
+        assert abs(sell_trade_data['AverageCostAtSale'] - 150.50) < 0.01
+        assert abs(sell_trade_data['Cost'] - 3762.50) < 0.01
+        assert abs(sell_trade_data['CapitalGainLoss'] - 602.51) < 0.01
+
 
 class TestTransferTradeProcessing:
     """Test transfer trade processing."""
@@ -232,6 +243,104 @@ class TestTradeProcessing:
         success, message = calculator.process_trade(bad_trade)
         assert not success
         assert "Unknown trade type" in message
+
+        trades = calculator.data_manager.read_trades()
+        assert trades.empty
+
+    def test_process_trade_invalid_sell_is_not_saved_to_history(self, calculator, populated_data_manager):
+        """Test failed sell validation happens before trade history persistence."""
+        sell_too_many = {
+            'Account': 'TFSA',
+            'StockName': 'Apple Inc.',
+            'StockSymbol': 'AAPL',
+            'DateOfTrade': date.today().strftime('%Y-%m-%d'),
+            'TradeType': 'S',
+            'SharesTraded': 150,
+            'PricePerShare': 175.00,
+            'Commission': 9.99
+        }
+        initial_trades = len(calculator.data_manager.read_trades())
+
+        success, message = calculator.process_trade(sell_too_many)
+
+        assert not success
+        assert "Insufficient shares" in message
+        assert len(calculator.data_manager.read_trades()) == initial_trades
+
+    def test_process_trade_existing_buy_allows_symbol_only_name(self, calculator, populated_data_manager):
+        """Test existing holdings can be bought with symbol only."""
+        buy_more = {
+            'Account': 'TFSA',
+            'StockName': '',
+            'StockSymbol': 'AAPL',
+            'DateOfTrade': date.today().strftime('%Y-%m-%d'),
+            'TradeType': 'B',
+            'SharesTraded': 10,
+            'PricePerShare': 160.00,
+            'Commission': 9.99
+        }
+
+        success, message = calculator.process_trade(buy_more)
+
+        assert success
+        record = calculator.data_manager.get_consolidated_record('TFSA', 'AAPL')
+        assert record['StockName'] == 'Apple Inc.'
+        assert record['Quantity'] == 110
+
+    def test_process_trade_new_buy_requires_name(self, calculator):
+        """Test new symbols still require a stock name."""
+        buy_new_without_name = {
+            'Account': 'TFSA',
+            'StockName': '',
+            'StockSymbol': 'NVDA',
+            'DateOfTrade': date.today().strftime('%Y-%m-%d'),
+            'TradeType': 'B',
+            'SharesTraded': 10,
+            'PricePerShare': 160.00,
+            'Commission': 9.99
+        }
+
+        success, message = calculator.process_trade(buy_new_without_name)
+
+        assert not success
+        assert "Stock name is required" in message
+        assert calculator.data_manager.read_trades().empty
+
+    def test_process_trade_persists_buy_cost_and_sell_proceeds(self, calculator):
+        """Test persisted history stores cost/proceeds audit columns."""
+        buy_trade = {
+            'Account': 'TFSA',
+            'StockName': 'Apple Inc.',
+            'StockSymbol': 'AAPL',
+            'DateOfTrade': '2024-01-15',
+            'TradeType': 'B',
+            'SharesTraded': 100,
+            'PricePerShare': 150.00,
+            'Commission': 9.99
+        }
+        sell_trade = {
+            'Account': 'TFSA',
+            'StockName': 'Apple Inc.',
+            'StockSymbol': 'AAPL',
+            'DateOfTrade': '2024-06-15',
+            'TradeType': 'S',
+            'SharesTraded': 25,
+            'PricePerShare': 175.00,
+            'Commission': 9.99
+        }
+
+        assert calculator.process_trade(buy_trade)[0]
+        assert calculator.process_trade(sell_trade)[0]
+
+        trades = calculator.data_manager.read_trades()
+        buy_row = trades.iloc[0]
+        sell_row = trades.iloc[1]
+        assert abs(buy_row['Cost'] - 15009.99) < 0.01
+        assert pd.isna(buy_row['GrossProceeds'])
+        assert abs(sell_row['GrossProceeds'] - 4375.00) < 0.01
+        assert abs(sell_row['NetProceeds'] - 4365.01) < 0.01
+        assert abs(sell_row['AverageCostAtSale'] - 150.0999) < 0.01
+        assert abs(sell_row['CapitalGainLoss'] - 612.51) < 0.01
 
 
 class TestAddExistingHolding:

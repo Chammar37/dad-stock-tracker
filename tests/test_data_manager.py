@@ -30,7 +30,9 @@ class TestDataManagerInitialization:
         ]
         assert list(trades.columns) == [
             'Account', 'StockName', 'StockSymbol', 'DateOfTrade',
-            'TradeType', 'SharesTraded', 'PricePerShare', 'Commission'
+            'TradeType', 'SharesTraded', 'PricePerShare', 'Commission',
+            'Cost', 'GrossProceeds', 'NetProceeds',
+            'AverageCostAtSale', 'CapitalGainLoss'
         ]
 
 
@@ -190,6 +192,27 @@ class TestDataManagerConsolidatedOperations:
         success = data_manager.update_consolidated_record('TFSA', 'TSLA', invalid_data)
         assert not success
 
+    def test_update_consolidated_rejects_invalid_quantity(self, data_manager):
+        """Test that invalid edited quantity is rejected without writing."""
+        invalid_data = {
+            'StockName': 'Tesla Inc.',
+            'Quantity': -1,
+            'AveragePricePerShare': 250.00,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': '2024-06-01'
+        }
+
+        success = data_manager.update_consolidated_record('TFSA', 'TSLA', invalid_data)
+
+        assert not success
+        assert data_manager.read_consolidated().empty
+
+    def test_delete_consolidated_record_rejects_missing_record(self, data_manager):
+        """Test deleting a missing consolidated record fails explicitly."""
+        success = data_manager.delete_consolidated_record('TFSA', 'MISSING')
+
+        assert not success
+
     def test_get_consolidated_record(self, populated_data_manager):
         """Test retrieving a consolidated record."""
         record = populated_data_manager.get_consolidated_record('TFSA', 'AAPL')
@@ -217,6 +240,84 @@ class TestDataManagerConsolidatedOperations:
         # Verify AAPL is gone
         record = populated_data_manager.get_consolidated_record('TFSA', 'AAPL')
         assert record is None
+
+    def test_replace_consolidated_record_renames_key_atomically(self, populated_data_manager):
+        """Test replacing account/symbol updates one row in a single operation."""
+        updated_data = {
+            'StockName': 'Apple Canada',
+            'Quantity': 100,
+            'AveragePricePerShare': 150.50,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': '2024-01-15'
+        }
+
+        success = populated_data_manager.replace_consolidated_record(
+            'TFSA', 'AAPL', 'TFSA', 'AAPL.TO', updated_data
+        )
+
+        assert success
+        assert populated_data_manager.get_consolidated_record('TFSA', 'AAPL') is None
+        replacement = populated_data_manager.get_consolidated_record('TFSA', 'AAPL.TO')
+        assert replacement is not None
+        assert replacement['StockName'] == 'Apple Canada'
+
+    def test_replace_consolidated_record_rejects_duplicate_destination(self, populated_data_manager):
+        """Test duplicate destination account/symbol does not remove the original."""
+        updated_data = {
+            'StockName': 'Apple Inc.',
+            'Quantity': 100,
+            'AveragePricePerShare': 150.50,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': '2024-01-15'
+        }
+
+        success = populated_data_manager.replace_consolidated_record(
+            'TFSA', 'AAPL', 'TFSA', 'MSFT', updated_data
+        )
+
+        assert not success
+        assert populated_data_manager.get_consolidated_record('TFSA', 'AAPL') is not None
+        assert populated_data_manager.get_consolidated_record('TFSA', 'MSFT') is not None
+
+    def test_replace_consolidated_record_rejects_invalid_replacement_without_data_loss(self, populated_data_manager):
+        """Test invalid replacement data leaves the original row unchanged."""
+        updated_data = {
+            'StockName': 'Apple Inc.',
+            'Quantity': -1,
+            'AveragePricePerShare': 150.50,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': '2024-01-15'
+        }
+
+        success = populated_data_manager.replace_consolidated_record(
+            'TFSA', 'AAPL', 'TFSA', 'AAPL.TO', updated_data
+        )
+
+        assert not success
+        original = populated_data_manager.get_consolidated_record('TFSA', 'AAPL')
+        assert original is not None
+        assert original['Quantity'] == 100
+        assert populated_data_manager.get_consolidated_record('TFSA', 'AAPL.TO') is None
+
+    def test_replace_consolidated_record_write_failure_leaves_original_file(self, populated_data_manager, monkeypatch):
+        """Test failed write does not pre-delete the original record."""
+        updated_data = {
+            'StockName': 'Apple Canada',
+            'Quantity': 100,
+            'AveragePricePerShare': 150.50,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': '2024-01-15'
+        }
+
+        monkeypatch.setattr(populated_data_manager, "write_consolidated", lambda df: False)
+
+        success = populated_data_manager.replace_consolidated_record(
+            'TFSA', 'AAPL', 'TFSA', 'AAPL.TO', updated_data
+        )
+
+        assert not success
+        assert populated_data_manager.get_consolidated_record('TFSA', 'AAPL') is not None
+        assert populated_data_manager.get_consolidated_record('TFSA', 'AAPL.TO') is None
 
 
 class TestDataManagerHelpers:
