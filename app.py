@@ -13,6 +13,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 
 from utils.data_manager import DataManager
 from utils.calculations import TradeCalculator
+from utils.ui_helpers import (
+    BUTTON_STYLES_CSS,
+    add_row_numbers,
+    build_available_stock_options,
+    build_holding_summary,
+    format_currency,
+    format_number,
+)
 
 # Chart Theme Configuration
 CHART_COLORS = {
@@ -43,30 +51,7 @@ st.set_page_config(
 )
 
 # Custom CSS for button colors
-st.markdown("""
-<style>
-    /* Green Preview buttons (secondary type) */
-    div[data-testid="column"]:first-child button[kind="secondary"] {
-        background-color: #28a745 !important;
-        color: white !important;
-        font-weight: bold !important;
-        border: none !important;
-    }
-    div[data-testid="column"]:first-child button[kind="secondary"]:hover {
-        background-color: #218838 !important;
-    }
-
-    /* Red Process Trade buttons (primary type) */
-    div[data-testid="column"]:last-child button[kind="primary"] {
-        background-color: #dc3545 !important;
-        color: white !important;
-        border: none !important;
-    }
-    div[data-testid="column"]:last-child button[kind="primary"]:hover {
-        background-color: #c82333 !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(BUTTON_STYLES_CSS, unsafe_allow_html=True)
 
 # Initialize data manager and calculator
 # Note: No caching here because these objects read/write CSV files that change frequently
@@ -86,28 +71,6 @@ page = st.sidebar.selectbox(
     "Navigate",
     ["Consolidated Record", "Trade Entry", "Pre-populate Database", "Trade History", "Stock Charts"]
 )
-
-# Helper functions
-def format_currency(value):
-    """Format currency values."""
-    if pd.isna(value):
-        return "$0.00"
-    return f"${value:,.2f}"
-
-def format_number(value):
-    """Format number values with appropriate decimal places."""
-    if pd.isna(value):
-        return "0"
-    
-    # If the value is less than 1, show up to 4 decimal places
-    if abs(value) < 1:
-        return f"{value:.4f}".rstrip('0').rstrip('.')
-    # If the value is less than 10, show 2 decimal places
-    elif abs(value) < 10:
-        return f"{value:.2f}".rstrip('0').rstrip('.')
-    # For larger values, show no decimal places
-    else:
-        return f"{value:,.0f}"
 
 # Helper function to resolve TSX symbols (tries .TO first, then falls back to plain symbol)
 @st.cache_data(ttl=86400)
@@ -285,37 +248,8 @@ def get_available_stocks_for_sell(account: str = None) -> list:
     Returns list of tuples: (symbol, display_name, quantity)
     """
     try:
-        df = data_manager.read_consolidated()
-        if df.empty:
-            return []
-        
-        # Filter by account if specified
-        if account:
-            df = df[df['Account'] == account]
-        
-        # Ensure integer quantities and include stocks with quantity > 0
-        if 'Quantity' in df.columns:
-            df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0).round().astype(int)
-        df = df[df['Quantity'] > 0]
-        
-        available_stocks = []
-        for _, row in df.iterrows():
-            symbol = row['StockSymbol']
-            name = row['StockName']
-            quantity = int(row['Quantity'])
-            account_name = row['Account']
-
-            # Integer quantity display
-            qty_display = f"{quantity:d}"
-
-            display_name = f"{symbol} - {name} ({qty_display} shares in {account_name})"
-            available_stocks.append((symbol, display_name, quantity))
-
-        # Sort by stock symbol in ascending order (A → Z)
-        available_stocks.sort(key=lambda x: x[0])
-
-        return available_stocks
-    except:
+        return build_available_stock_options(data_manager.read_consolidated(), account)
+    except Exception:
         return []
 
 # Page 1: Consolidated Record (Dashboard)
@@ -370,10 +304,7 @@ if page == "Consolidated Record":
         # Display table
         if not filtered_df.empty:
             # Format the dataframe for display
-            display_df = filtered_df.copy()
-
-            # Add row numbers starting from 1
-            display_df.insert(0, '#', range(1, len(display_df) + 1))
+            display_df = add_row_numbers(filtered_df)
 
             display_df['Quantity'] = display_df['Quantity'].apply(format_number)
             display_df['AveragePricePerShare'] = display_df['AveragePricePerShare'].apply(format_currency)
@@ -461,7 +392,11 @@ elif page == "Trade Entry":
                                 break
 
                         # Visual grouping: Show Name/Symbol with available quantity
-                        st.markdown(f"**📊 {stock_symbol} - {stock_name} ({max_quantity:d} shares available)**")
+                        st.markdown(build_holding_summary(
+                            stock_symbol,
+                            stock_name,
+                            f" ({max_quantity:d} shares available)",
+                        ))
                     else:
                         stock_symbol = ""
                         stock_name = ""
@@ -486,7 +421,7 @@ elif page == "Trade Entry":
                             avg_price = float(record['AveragePricePerShare'])
                             avg_price_display = f" @ {format_currency(avg_price)}/share (current avg)"
 
-                        st.markdown(f"**📊 {final_symbol} - {resolved_name}{avg_price_display}**")
+                        st.markdown(build_holding_summary(final_symbol, resolved_name, avg_price_display))
                 max_quantity = None  # No limit for buying
 
             trade_date = st.date_input("Date of Trade", value=date.today())
@@ -707,7 +642,7 @@ elif page == "Pre-populate Database":
                 cost_per_share = book_cost / int(quantity)
                 cost_per_share_display = f" @ {format_currency(cost_per_share)}/share"
 
-            st.markdown(f"**📊 {final_symbol} - {resolved_name}{cost_per_share_display}**")
+            st.markdown(build_holding_summary(final_symbol, resolved_name, cost_per_share_display))
         
         submitted = st.form_submit_button("Add Holding", type="primary")
         
@@ -1091,4 +1026,3 @@ elif page == "Stock Charts":
                 title="Portfolio Allocation by Value"
             )
             st.plotly_chart(fig_pie, use_container_width=True)
-
