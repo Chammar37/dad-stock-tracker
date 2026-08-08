@@ -8,6 +8,10 @@ import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+from dotenv import load_dotenv
+
+
+load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"))
 
 # Add the utils directory to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))

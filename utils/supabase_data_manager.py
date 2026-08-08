@@ -2,14 +2,64 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 
 from .data_manager import DataManager
+
+
+def _streamlit_secret(key: str, default=None):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
+def get_supabase_connection_config() -> Dict[str, Optional[str]]:
+    """Load supported Supabase settings without exposing credential values."""
+    local_env = dotenv_values(Path.cwd() / ".env")
+    connections = _streamlit_secret("connections", {})
+    connection_url = (
+        connections.get("supabase", {}).get("url")
+        if hasattr(connections, "get")
+        else None
+    )
+    project_url = (
+        os.environ.get("SUPABASE_URL")
+        or local_env.get("SUPABASE_URL")
+        or _streamlit_secret("SUPABASE_URL")
+    )
+    database_password = (
+        os.environ.get("SUPABASE_DATABASE_PASSWORD")
+        or os.environ.get("database_password")
+        or local_env.get("SUPABASE_DATABASE_PASSWORD")
+        or local_env.get("database_password")
+        or _streamlit_secret("SUPABASE_DATABASE_PASSWORD")
+        or _streamlit_secret("database_password")
+    )
+    return {
+        "database_url": (
+            os.environ.get("SUPABASE_DATABASE_URL")
+            or local_env.get("SUPABASE_DATABASE_URL")
+            or connection_url
+        ),
+        "project_url": project_url,
+        "database_password": database_password,
+    }
+
+
+def has_supabase_connection_config() -> bool:
+    config = get_supabase_connection_config()
+    return bool(
+        config["database_url"]
+        or (config["project_url"] and config["database_password"])
+    )
 
 
 class SupabaseDataManager:
@@ -57,29 +107,34 @@ class SupabaseDataManager:
         self._active_connection = None
 
     def _load_engine_from_streamlit(self):
-        load_dotenv()
-        try:
-            connection = st.connection(self.connection_name, type="sql")
-            if hasattr(connection, "engine"):
-                return connection.engine
-        except Exception:
-            pass
+        config = get_supabase_connection_config()
+        if config["database_url"]:
+            try:
+                connection = st.connection(self.connection_name, type="sql")
+                if hasattr(connection, "engine"):
+                    return connection.engine
+            except Exception:
+                pass
+            return create_engine(config["database_url"])
 
-        try:
-            url = (
-                st.secrets.get("connections", {})
-                .get(self.connection_name, {})
-                .get("url")
+        if config["project_url"] and config["database_password"]:
+            project_host = config["project_url"].split("://", 1)[-1].split("/", 1)[0]
+            project_ref = project_host.split(".", 1)[0]
+            url = URL.create(
+                "postgresql+psycopg2",
+                username="postgres",
+                password=config["database_password"],
+                host=f"db.{project_ref}.supabase.co",
+                port=5432,
+                database="postgres",
+                query={"sslmode": "require"},
             )
-        except Exception:
-            url = None
-        url = url or os.environ.get("SUPABASE_DATABASE_URL")
-        if not url:
-            raise RuntimeError(
-                "Supabase storage is selected but neither connections.supabase.url "
-                "nor SUPABASE_DATABASE_URL is configured"
-            )
-        return create_engine(url)
+            return create_engine(url, pool_pre_ping=True)
+
+        raise RuntimeError(
+            "Supabase storage is selected but database connection credentials "
+            "are not configured"
+        )
 
     @contextmanager
     def transaction(self):
@@ -178,19 +233,30 @@ class SupabaseDataManager:
             with self.transaction():
                 self._execute(text("delete from holdings"))
                 for _, row in df.iterrows():
-                    success = self.update_consolidated_record(
-                        row["Account"],
-                        row["StockSymbol"],
+                    self._execute(
+                        text("""
+                            insert into holdings (
+                                account, stock_name, stock_symbol, quantity,
+                                average_price_per_share, capital_gain_loss,
+                                date_of_acquisition
+                            ) values (
+                                :account, :stock_name, :stock_symbol, :quantity,
+                                :average_price_per_share, :capital_gain_loss,
+                                :date_of_acquisition
+                            )
+                        """),
                         {
-                            "StockName": row["StockName"],
-                            "Quantity": int(row["Quantity"]),
-                            "AveragePricePerShare": float(row["AveragePricePerShare"]),
-                            "CapitalGainLoss": float(row.get("CapitalGainLoss", 0)),
-                            "DateOfAcquisition": row["DateOfAcquisition"],
+                            "account": row["Account"],
+                            "stock_name": row["StockName"],
+                            "stock_symbol": row["StockSymbol"],
+                            "quantity": int(row["Quantity"]),
+                            "average_price_per_share": float(row["AveragePricePerShare"]),
+                            "capital_gain_loss": float(row.get("CapitalGainLoss", 0)),
+                            "date_of_acquisition": self._to_date_value(
+                                row["DateOfAcquisition"]
+                            ),
                         },
                     )
-                    if not success:
-                        raise RuntimeError("Failed to write consolidated row")
             return True
         except Exception as e:
             st.error(f"Error writing consolidated data: {e}")
@@ -201,8 +267,7 @@ class SupabaseDataManager:
             with self.transaction():
                 self._execute(text("delete from trades"))
                 for _, row in df.iterrows():
-                    if not self.add_trade(row.to_dict()):
-                        raise RuntimeError("Failed to write trade row")
+                    self._insert_trade(row.to_dict())
             return True
         except Exception as e:
             st.error(f"Error writing trades data: {e}")
@@ -214,40 +279,48 @@ class SupabaseDataManager:
                 st.error("Trade date is required and cannot be empty")
                 return False
 
-            self._execute(
-                text("""
-                    insert into trades (
-                        account, stock_name, stock_symbol, date_of_trade, trade_type,
-                        shares_traded, price_per_share, commission, cost,
-                        gross_proceeds, net_proceeds, average_cost_at_sale,
-                        capital_gain_loss
-                    ) values (
-                        :account, :stock_name, :stock_symbol, :date_of_trade, :trade_type,
-                        :shares_traded, :price_per_share, :commission, :cost,
-                        :gross_proceeds, :net_proceeds, :average_cost_at_sale,
-                        :capital_gain_loss
-                    )
-                """),
-                {
-                    "account": trade_data.get("Account"),
-                    "stock_name": trade_data.get("StockName"),
-                    "stock_symbol": trade_data.get("StockSymbol"),
-                    "date_of_trade": self._to_date_value(trade_data.get("DateOfTrade")),
-                    "trade_type": str(trade_data.get("TradeType", "")).upper(),
-                    "shares_traded": int(trade_data.get("SharesTraded")),
-                    "price_per_share": float(trade_data.get("PricePerShare")),
-                    "commission": float(trade_data.get("Commission", 0)),
-                    "cost": self._clean_value(trade_data.get("Cost")),
-                    "gross_proceeds": self._clean_value(trade_data.get("GrossProceeds")),
-                    "net_proceeds": self._clean_value(trade_data.get("NetProceeds")),
-                    "average_cost_at_sale": self._clean_value(trade_data.get("AverageCostAtSale")),
-                    "capital_gain_loss": self._clean_value(trade_data.get("CapitalGainLoss")),
-                },
-            )
+            self._insert_trade(trade_data)
             return True
         except Exception as e:
             st.error(f"Error adding trade: {e}")
             return False
+
+    def _insert_trade(self, trade_data: Dict):
+        """Insert a normalized trade, allowing null dates for legacy migration."""
+        self._execute(
+            text("""
+                insert into trades (
+                    account, stock_name, stock_symbol, date_of_trade, trade_type,
+                    shares_traded, price_per_share, commission, cost,
+                    gross_proceeds, net_proceeds, average_cost_at_sale,
+                    capital_gain_loss
+                ) values (
+                    :account, :stock_name, :stock_symbol, :date_of_trade, :trade_type,
+                    :shares_traded, :price_per_share, :commission, :cost,
+                    :gross_proceeds, :net_proceeds, :average_cost_at_sale,
+                    :capital_gain_loss
+                )
+            """),
+            {
+                "account": trade_data.get("Account"),
+                "stock_name": trade_data.get("StockName"),
+                "stock_symbol": trade_data.get("StockSymbol"),
+                "date_of_trade": self._to_date_value(trade_data.get("DateOfTrade")),
+                "trade_type": str(trade_data.get("TradeType", "")).upper(),
+                "shares_traded": int(trade_data.get("SharesTraded")),
+                "price_per_share": float(trade_data.get("PricePerShare")),
+                "commission": float(trade_data.get("Commission", 0)),
+                "cost": self._clean_value(trade_data.get("Cost")),
+                "gross_proceeds": self._clean_value(trade_data.get("GrossProceeds")),
+                "net_proceeds": self._clean_value(trade_data.get("NetProceeds")),
+                "average_cost_at_sale": self._clean_value(
+                    trade_data.get("AverageCostAtSale")
+                ),
+                "capital_gain_loss": self._clean_value(
+                    trade_data.get("CapitalGainLoss")
+                ),
+            },
+        )
 
     def delete_trade(self, trade_index: int) -> bool:
         try:
