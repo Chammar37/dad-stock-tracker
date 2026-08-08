@@ -66,7 +66,7 @@ the fallback when no storage backend is configured.
      account text not null,
      stock_name text not null,
      stock_symbol text not null,
-     date_of_trade date not null,
+     date_of_trade date,
      trade_type text not null check (trade_type in ('B', 'S', 'T')),
      shares_traded integer not null check (shares_traded > 0),
      price_per_share numeric(18, 6) not null,
@@ -85,7 +85,8 @@ the fallback when no storage backend is configured.
    example URL with the Supabase Postgres connection string. Do not commit
    `.streamlit/secrets.toml`. An existing `.env` file is also supported with
    `STOCK_TRACKER_STORAGE_BACKEND=supabase`, `SUPABASE_DATABASE_URL`, and optionally
-   `STOCK_TRACKER_APP_PASSWORD`.
+   `STOCK_TRACKER_APP_PASSWORD`. If `SUPABASE_DATABASE_URL` is not available, the
+   app can derive a direct connection from `SUPABASE_URL` and `database_password`.
 
 3. For Streamlit Cloud, add the same TOML values in the app dashboard under
    Settings -> Secrets. Keep the database URL and app password out of browser-side
@@ -106,7 +107,8 @@ the fallback when no storage backend is configured.
 
 Trade entry uses a single transaction for the trade history insert and holdings
 update when the SQL backend is selected. Invalid sells are validated before any
-trade history row is written.
+trade history row is written. The database allows null dates only so legacy CSV
+rows with unknown historical dates can be migrated without inventing dates.
 
 ## Calculations
 

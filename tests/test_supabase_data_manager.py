@@ -33,7 +33,7 @@ def sqlite_engine():
                 account text not null,
                 stock_name text not null,
                 stock_symbol text not null,
-                date_of_trade date not null,
+                date_of_trade date,
                 trade_type text not null check (trade_type in ('B', 'S', 'T')),
                 shares_traded integer not null check (shares_traded > 0),
                 price_per_share numeric not null,
@@ -181,3 +181,30 @@ def test_write_methods_replace_existing_rows(supabase_manager):
 
     assert len(supabase_manager.read_consolidated()) == 1
     assert len(supabase_manager.read_trades()) == 1
+
+
+def test_write_methods_preserve_unknown_legacy_dates(supabase_manager):
+    consolidated = pd.DataFrame([{
+        "Account": "TFSA",
+        "StockName": "Apple Inc.",
+        "StockSymbol": "AAPL",
+        "Quantity": 100,
+        "AveragePricePerShare": 150.50,
+        "CapitalGainLoss": 0.0,
+        "DateOfAcquisition": pd.NaT,
+    }])
+    trades = pd.DataFrame([{
+        "Account": "TFSA",
+        "StockName": "Apple Inc.",
+        "StockSymbol": "AAPL",
+        "DateOfTrade": pd.NaT,
+        "TradeType": "B",
+        "SharesTraded": 100,
+        "PricePerShare": 150.00,
+        "Commission": 9.99,
+    }])
+
+    assert supabase_manager.write_consolidated(consolidated)
+    assert supabase_manager.write_trades(trades)
+    assert pd.isna(supabase_manager.read_consolidated().iloc[0]["DateOfAcquisition"])
+    assert pd.isna(supabase_manager.read_trades().iloc[0]["DateOfTrade"])

@@ -1,14 +1,12 @@
 import os
 
 import streamlit as st
-from dotenv import load_dotenv
 
 from .data_manager import DataManager
-from .supabase_data_manager import SupabaseDataManager
-
-
-load_dotenv()
-
+from .supabase_data_manager import (
+    SupabaseDataManager,
+    has_supabase_connection_config,
+)
 
 def get_storage_backend() -> str:
     """Return configured storage backend without exposing credential values."""
@@ -17,9 +15,13 @@ def get_storage_backend() -> str:
         return env_backend.strip().lower()
 
     try:
-        return st.secrets.get("storage", {}).get("backend", "csv").strip().lower()
+        configured_backend = st.secrets.get("storage", {}).get("backend")
     except Exception:
-        return "csv"
+        configured_backend = None
+    if configured_backend:
+        return configured_backend.strip().lower()
+
+    return "supabase" if has_supabase_connection_config() else "csv"
 
 
 def create_data_manager(data_dir: str = "data"):
