@@ -14,3 +14,6 @@ pandas>=2.1.0
 streamlit>=1.30.0
 yfinance>=0.2.35
 plotly>=5.18.0
+python-dotenv>=1.0.0
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.0

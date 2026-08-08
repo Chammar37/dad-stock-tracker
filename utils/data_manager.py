@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Optional
 import streamlit as st
 from datetime import datetime
+from contextlib import contextmanager
 
 class DataManager:
     """Handles all CSV file operations for the stock tracker app."""
@@ -17,6 +18,18 @@ class DataManager:
         
         # Initialize CSV files if they don't exist
         self._initialize_files()
+
+    @contextmanager
+    def transaction(self):
+        """Best-effort atomic block for CSV writes using in-memory snapshots."""
+        original_consolidated = self.read_consolidated()
+        original_trades = self.read_trades()
+        try:
+            yield self
+        except Exception:
+            self.write_consolidated(original_consolidated)
+            self.write_trades(original_trades)
+            raise
     
     def _initialize_files(self):
         """Initialize CSV files with headers if they don't exist."""
