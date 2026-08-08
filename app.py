@@ -16,10 +16,21 @@ from utils.calculations import TradeCalculator
 from utils.ui_helpers import (
     BUTTON_STYLES_CSS,
     add_row_numbers,
+    build_account_options,
     build_available_stock_options,
     build_holding_summary,
+    build_stock_option_lookup,
+    build_trade_quantity_context,
+    calculate_cost_per_share,
+    find_existing_holding_by_symbol,
     format_currency,
     format_number,
+    normalize_trade_quantity_state,
+    NEW_ACCOUNT_OPTION,
+    reset_invalid_selectbox_value,
+    reset_prepopulate_state,
+    resolve_account_input,
+    reset_trade_entry_state,
 )
 
 # Chart Theme Configuration
@@ -326,6 +337,103 @@ if page == "Consolidated Record":
             })
 
             st.dataframe(display_df, width='stretch')
+
+            st.subheader("Modify Consolidated Records")
+            st.caption("Manual edits replace the selected consolidated row. Trade-history rebuilds can overwrite these edits for rows rebuilt from trades.")
+
+            edit_options = []
+            for idx in filtered_df.index:
+                row = df.loc[idx]
+                label = f"{row['Account']} | {row['StockSymbol']} | {row['StockName']}"
+                edit_options.append((idx, label))
+
+            selected_record = st.selectbox(
+                "Select record to modify",
+                options=[None] + edit_options,
+                format_func=lambda option: "Select a record..." if option is None else option[1],
+                key="consolidated_edit_select",
+            )
+
+            if selected_record is not None:
+                selected_idx = selected_record[0]
+                row = df.loc[selected_idx]
+
+                with st.form("edit_consolidated_form"):
+                    edit_col1, edit_col2 = st.columns(2)
+                    with edit_col1:
+                        edit_account = st.text_input("Account", value=str(row['Account']))
+                        edit_symbol = st.text_input("Symbol", value=str(row['StockSymbol'])).upper()
+                        edit_name = st.text_input("Stock Name", value=str(row['StockName']))
+                        edit_quantity = st.number_input(
+                            "Quantity",
+                            min_value=0,
+                            step=1,
+                            format="%d",
+                            value=int(row['Quantity']),
+                        )
+                    with edit_col2:
+                        edit_average = st.number_input(
+                            "Avg Price/Share",
+                            min_value=0.0,
+                            step=0.0001,
+                            format="%.4f",
+                            value=float(row['AveragePricePerShare']),
+                        )
+                        edit_gain_loss = st.number_input(
+                            "Gain/Loss",
+                            step=0.01,
+                            format="%.2f",
+                            value=float(row['CapitalGainLoss']),
+                        )
+                        existing_date = pd.to_datetime(row['DateOfAcquisition'], errors='coerce')
+                        edit_date = st.date_input(
+                            "Date Acquired",
+                            value=existing_date.date() if pd.notna(existing_date) else date.today(),
+                        )
+
+                    save_edit = st.form_submit_button("Save Changes", type="primary")
+
+                    if save_edit:
+                        updated_data = {
+                            'StockName': edit_name.strip(),
+                            'Quantity': int(edit_quantity),
+                            'AveragePricePerShare': float(edit_average),
+                            'CapitalGainLoss': float(edit_gain_loss),
+                            'DateOfAcquisition': edit_date.strftime('%Y-%m-%d'),
+                        }
+                        delete_old_key = (
+                            str(row['Account']) != edit_account.strip()
+                            or str(row['StockSymbol']) != edit_symbol.strip()
+                        )
+
+                        if delete_old_key:
+                            saved = data_manager.replace_consolidated_record(
+                                str(row['Account']),
+                                str(row['StockSymbol']),
+                                edit_account.strip(),
+                                edit_symbol.strip(),
+                                updated_data,
+                            )
+                        else:
+                            saved = data_manager.update_consolidated_record(
+                                str(row['Account']), str(row['StockSymbol']), updated_data
+                            )
+
+                        if saved:
+                            st.success("Consolidated record updated")
+                            st.rerun()
+
+                confirm_delete = st.checkbox(
+                    f"Confirm delete {row['StockSymbol']} from {row['Account']}",
+                    key=f"confirm_delete_{selected_idx}",
+                )
+                if st.button("Delete Record", type="primary", disabled=not confirm_delete):
+                    deleted = data_manager.delete_consolidated_record(
+                        str(row['Account']), str(row['StockSymbol'])
+                    )
+                    if deleted:
+                        st.success("Consolidated record deleted")
+                        st.rerun()
         else:
             st.info("No holdings match the selected filters.")
 
@@ -346,87 +454,135 @@ elif page == "Trade Entry":
     trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
                             format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
     
-    with st.form("trade_form", clear_on_submit=False):
-        st.subheader("Trade Details")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Account selection
-            if existing_accounts:
-                account = st.selectbox("Account", existing_accounts)
-            else:
-                account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
-            
-            # Initialize variables
-            stock_symbol = ""
-            stock_name = ""
-            max_quantity = None
-            resolved_symbol = None
-            resolved_name = None
-            
-            # Conditional stock input based on trade type
-            if trade_type in ["S", "T"]:  # Sell or Transfer
-                # Get available stocks for this account
-                available_stocks = get_available_stocks_for_sell(account if account else None)
-                
-                if available_stocks:
-                    # Create options for dropdown
-                    stock_options = [f"{display}" for _, display, _ in available_stocks]
-                    stock_options.insert(0, "Select a stock to sell/transfer...")
-                    
-                    selected_stock_display = st.selectbox(
-                        "Select Stock to Sell/Transfer",
-                        stock_options,
-                        key="sell_stock_select"
-                    )
-                    
-                    if selected_stock_display != "Select a stock to sell/transfer...":
-                        # Extract symbol and name from selection
-                        for symbol, display, quantity in available_stocks:
-                            if display == selected_stock_display:
-                                stock_symbol = symbol
-                                # Extract stock name from display
-                                stock_name = display.split(" - ")[1].split(" (")[0]
-                                max_quantity = int(quantity)
-                                break
+    st.subheader("Trade Details")
 
-                        # Visual grouping: Show Name/Symbol with available quantity
-                        st.markdown(build_holding_summary(
-                            stock_symbol,
-                            stock_name,
-                            f" ({max_quantity:d} shares available)",
-                        ))
-                    else:
-                        stock_symbol = ""
-                        stock_name = ""
-                        max_quantity = 0.0  # Ensure it's a float
+    selector_col1, selector_col2 = st.columns(2)
+
+    with selector_col1:
+        # Account selection lives outside the form so Sell options refresh immediately.
+        if existing_accounts:
+            selected_account = st.selectbox(
+                "Account",
+                build_account_options(existing_accounts),
+                key="trade_account",
+            )
+            new_account = ""
+            if selected_account == NEW_ACCOUNT_OPTION:
+                new_account = st.text_input(
+                    "New Account",
+                    placeholder="e.g., TFSA, RRSP, Personal",
+                    key="trade_new_account",
+                )
+            account = resolve_account_input(selected_account, new_account)
+        else:
+            account = st.text_input(
+                "Account",
+                placeholder="e.g., TFSA, RRSP, Personal",
+                key="trade_account",
+            )
+
+    stock_symbol = ""
+    stock_name = ""
+    manual_stock_name = ""
+    max_quantity = None
+    resolved_symbol = None
+    resolved_name = None
+
+    with selector_col2:
+        if trade_type in ["S", "T"]:
+            available_stocks = get_available_stocks_for_sell(account if account else None)
+
+            if available_stocks:
+                stock_lookup = build_stock_option_lookup(available_stocks)
+                stock_symbols = list(stock_lookup.keys())
+                sell_options = [""] + stock_symbols
+                reset_invalid_selectbox_value(
+                    st.session_state,
+                    "sell_stock_select",
+                    sell_options,
+                )
+
+                selected_stock_symbol = st.selectbox(
+                    "Select Stock to Sell/Transfer",
+                    options=sell_options,
+                    format_func=lambda symbol: (
+                        "Select a stock to sell/transfer..."
+                        if not symbol else str(stock_lookup[symbol]["display"])
+                    ),
+                    key="sell_stock_select",
+                )
+
+                if selected_stock_symbol:
+                    stock_symbol = selected_stock_symbol
+                    max_quantity = int(stock_lookup[stock_symbol]["quantity"])
+                    record = data_manager.get_consolidated_record(account, stock_symbol)
+                    stock_name = record["StockName"] if record else stock_symbol
+
+                    st.markdown(build_holding_summary(
+                        stock_symbol,
+                        stock_name,
+                        f" ({max_quantity:d} shares available)",
+                    ))
                 else:
-                    st.warning("No stocks available for selling/transferring in this account.")
-                    stock_symbol = ""
-                    stock_name = ""
-                    max_quantity = 0.0  # Ensure it's a float
-            else:  # Buy
-                stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-                # Resolve stock symbol (tries TSX .TO first) and get name
-                if stock_symbol:
+                    max_quantity = 0
+            else:
+                reset_invalid_selectbox_value(
+                    st.session_state,
+                    "sell_stock_select",
+                    [""],
+                )
+                st.warning("No stocks available for selling/transferring in this account.")
+                max_quantity = 0
+        else:
+            reset_invalid_selectbox_value(
+                st.session_state,
+                "sell_stock_select",
+                [""],
+            )
+            stock_symbol = st.text_input(
+                "Stock Symbol",
+                placeholder="e.g., AAPL",
+                key="buy_stock_symbol",
+            ).upper()
+            existing_holding = find_existing_holding_by_symbol(
+                data_manager.read_consolidated(), account if account else "", stock_symbol
+            )
+            if existing_holding:
+                resolved_symbol = existing_holding["StockSymbol"]
+                resolved_name = existing_holding["StockName"]
+
+            if stock_symbol:
+                if not existing_holding:
                     resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
 
-                    # Visual grouping: Show Name/Symbol/Avg Price summary
-                    if resolved_name:
-                        final_symbol = resolved_symbol if resolved_symbol else stock_symbol
-                        record = data_manager.get_consolidated_record(account if account else "", final_symbol)
-                        avg_price_display = ""
-                        if record:
-                            avg_price = float(record['AveragePricePerShare'])
-                            avg_price_display = f" @ {format_currency(avg_price)}/share (current avg)"
+                if resolved_name:
+                    final_symbol = resolved_symbol if resolved_symbol else stock_symbol
+                    record = existing_holding or data_manager.get_consolidated_record(
+                        account if account else "", final_symbol
+                    )
+                    avg_price_display = ""
+                    if record:
+                        avg_price = float(record["AveragePricePerShare"])
+                        avg_price_display = f" @ {format_currency(avg_price)}/share (current avg)"
 
-                        st.markdown(build_holding_summary(final_symbol, resolved_name, avg_price_display))
-                max_quantity = None  # No limit for buying
+                    st.markdown(build_holding_summary(final_symbol, resolved_name, avg_price_display))
+                else:
+                    manual_stock_name = st.text_input(
+                        "Stock Name",
+                        placeholder="Enter name for a new stock",
+                        key="buy_stock_name",
+                    )
 
+    quantity_context = build_trade_quantity_context(trade_type, account, stock_symbol)
+    normalize_trade_quantity_state(st.session_state, quantity_context)
+
+    with st.form("trade_form", clear_on_submit=False):
+        form_col1, form_col2 = st.columns(2)
+
+        with form_col1:
             trade_date = st.date_input("Date of Trade", value=date.today())
-        
-        with col2:
+
+        with form_col2:
             # Calculate max based on selection
             if trade_type in ["S", "T"] and max_quantity is not None and max_quantity > 0:
                 shares_max = int(max_quantity)
@@ -434,9 +590,7 @@ elif page == "Trade Entry":
             else:
                 shares_max = None
                 shares_help = None
-            
-            # Inside forms, widgets with key don't automatically read from session_state
-            # We must explicitly pass value to ensure the widget displays the stored value
+
             shares_traded = st.number_input(
                 "Shares Traded",
                 min_value=1,
@@ -444,12 +598,24 @@ elif page == "Trade Entry":
                 step=1,
                 format="%d",
                 help=shares_help,
-                value=st.session_state.get("shares_input", 1),  # Required inside forms
-                key="shares_input"  # Stores value in session_state on form submission
+                key="shares_input"
             )
 
-            price_per_share = st.number_input("Price per Share ($)", min_value=0.0, step=0.01, format="%.2f")
-            commission = st.number_input("Commission ($)", min_value=0.0, step=0.01, format="%.2f", value=9.99)
+            price_per_share = st.number_input(
+                "Price per Share ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="trade_price_per_share",
+            )
+            commission = st.number_input(
+                "Commission ($)",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                value=9.99,
+                key="trade_commission",
+            )
 
         # Preview and Process buttons for Buy and Sell trades
         col_btn1, col_btn2 = st.columns(2)
@@ -533,14 +699,16 @@ elif page == "Trade Entry":
                     else:
                         # Display preview in success box
                         st.success("✅ Preview - Sell Trade")
-                        col_a, col_b, col_c = st.columns(3)
+                        col_a, col_b, col_c, col_d = st.columns(4)
                         with col_a:
-                            st.metric("Net Proceeds", format_currency(preview['net_proceeds']))
+                            st.metric("Gross Proceeds", format_currency(preview['gross_proceeds']))
                         with col_b:
-                            st.metric("Trade Gain/Loss", format_currency(preview['trade_gain_loss']))
+                            st.metric("Net Proceeds", format_currency(preview['net_proceeds']))
                         with col_c:
-                            st.metric("Remaining Quantity", f"{preview['new_quantity']}")
-                        st.caption(f"Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
+                            st.metric("Cost", format_currency(preview['cost_basis']))
+                        with col_d:
+                            st.metric("Trade Gain/Loss", format_currency(preview['trade_gain_loss']))
+                        st.caption(f"Remaining quantity: {preview['new_quantity']} | Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
 
         if submitted:
             # shares_traded already has the correct value from the widget
@@ -556,6 +724,8 @@ elif page == "Trade Entry":
                 st.error("Please select a stock to sell/transfer.")
             elif trade_type == "B" and (not stock_symbol.strip()):
                 st.error("Please enter a stock symbol for buying.")
+            elif trade_type == "B" and not resolved_name and not manual_stock_name.strip():
+                st.error("Please enter a stock name for a new holding.")
             elif not trade_date:
                 st.error("Please select a valid trade date.")
             elif shares_traded < 1:
@@ -568,10 +738,10 @@ elif page == "Trade Entry":
                 # For Buy trades, use resolved symbol (with .TO if TSX), otherwise use the symbol from selection
                 if trade_type == "B" and resolved_symbol:
                     final_symbol = resolved_symbol
-                    final_name = resolved_name or stock_symbol
+                    final_name = resolved_name or manual_stock_name or stock_symbol
                 else:
                     final_symbol = stock_symbol.strip()
-                    final_name = stock_name or stock_symbol
+                    final_name = stock_name or manual_stock_name or stock_symbol
                 
                 # Prepare trade data
                 trade_data = {
@@ -591,13 +761,9 @@ elif page == "Trade Entry":
 
                 if success:
                     # Store success message in session state to show after rerun
-                    st.session_state.trade_success_message = f"✅ {message}"
+                    st.session_state.trade_success_message = "Trade Completed"
                     # Clear only after successful processing (do not clear on preview)
-                    for k in [
-                        "sell_stock_select",
-                        "shares_input",
-                    ]:
-                        st.session_state.pop(k, None)
+                    reset_trade_entry_state(st.session_state)
                     # Force page refresh to clear form
                     st.rerun()
                 else:
@@ -607,81 +773,123 @@ elif page == "Trade Entry":
 elif page == "Pre-populate Database":
     st.title("Pre-populate Database")
     st.markdown("Add existing stock holdings to the database")
-    
-    with st.form("prepopulate_form", clear_on_submit=True):
-        st.subheader("Existing Holding Details")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Account selection
-            existing_accounts = data_manager.get_accounts()
-            if existing_accounts:
-                account = st.selectbox("Account", existing_accounts)
+
+    if st.session_state.pop("prepopulate_reset_requested", False):
+        reset_prepopulate_state(st.session_state)
+
+    if "prepopulate_success_message" in st.session_state:
+        st.success(st.session_state.prepopulate_success_message)
+        del st.session_state.prepopulate_success_message
+
+    st.subheader("Existing Holding Details")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        existing_accounts = data_manager.get_accounts()
+        if existing_accounts:
+            selected_account = st.selectbox(
+                "Account",
+                build_account_options(existing_accounts),
+                key="prepopulate_account",
+            )
+            new_account = ""
+            if selected_account == NEW_ACCOUNT_OPTION:
+                new_account = st.text_input(
+                    "New Account",
+                    placeholder="e.g., TFSA, RRSP, Personal",
+                    key="prepopulate_new_account",
+                )
+            account = resolve_account_input(selected_account, new_account)
+        else:
+            account = st.text_input(
+                "Account",
+                placeholder="e.g., TFSA, RRSP, Personal",
+                key="prepopulate_account",
+            )
+
+        stock_symbol = st.text_input(
+            "Stock Symbol",
+            placeholder="e.g., AAPL",
+            key="prepopulate_stock_symbol",
+        ).upper()
+        resolved_symbol = None
+        resolved_name = None
+        if stock_symbol:
+            resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
+
+        quantity = st.number_input(
+            "Quantity",
+            min_value=0,
+            step=1,
+            format="%d",
+            key="prepopulate_quantity",
+        )
+
+    with col2:
+        book_cost = st.number_input(
+            "Book Cost ($)",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="prepopulate_book_cost",
+        )
+        acquisition_date = st.date_input(
+            "Date of Acquisition",
+            key="prepopulate_date",
+        )
+
+    if stock_symbol and resolved_name:
+        final_symbol = resolved_symbol if resolved_symbol else stock_symbol
+        cost_per_share = calculate_cost_per_share(quantity, book_cost)
+        cost_per_share_display = (
+            f" @ {format_currency(cost_per_share)}/share"
+            if cost_per_share is not None else ""
+        )
+
+        st.markdown(build_holding_summary(
+            final_symbol,
+            resolved_name,
+            cost_per_share_display,
+        ))
+
+    submitted = st.button("Add Holding", type="primary")
+
+    if submitted:
+        if not account.strip():
+            st.error("Please enter an account name.")
+        elif not stock_symbol.strip():
+            st.error("Please enter a stock symbol.")
+        elif not acquisition_date:
+            st.error("Please select a valid acquisition date.")
+        elif quantity < 1:
+            st.error("Quantity must be at least 1.")
+        elif book_cost <= 0:
+            st.error("Book cost must be greater than 0.")
+        else:
+            final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
+            final_name = resolved_name or stock_symbol
+
+            holding_data = {
+                'Account': account.strip(),
+                'StockName': final_name.strip(),
+                'StockSymbol': final_symbol.strip(),
+                'Quantity': int(quantity),
+                'BookCost': book_cost,
+                'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
+            }
+
+            with st.spinner("Adding holding..."):
+                success, message = calculator.add_existing_holding(holding_data)
+
+            if success:
+                st.session_state.prepopulate_success_message = (
+                    f"✅ Holding added successfully! {message}"
+                )
+                st.session_state.prepopulate_reset_requested = True
+                st.rerun()
             else:
-                account = st.text_input("Account", placeholder="e.g., TFSA, RRSP, Personal")
-            
-            stock_symbol = st.text_input("Stock Symbol", placeholder="e.g., AAPL").upper()
-            # Resolve stock symbol (tries TSX .TO first) and get name
-            resolved_symbol = None
-            resolved_name = None
-            if stock_symbol:
-                resolved_symbol, resolved_name = resolve_stock_symbol(stock_symbol)
-
-            quantity = st.number_input("Quantity", min_value=0, step=1, format="%d")
-
-        with col2:
-            book_cost = st.number_input("Book Cost ($)", min_value=0.0, step=0.01, format="%.2f")
-            acquisition_date = st.date_input("Date of Acquisition")
-
-        # Visual grouping: Show Name/Symbol/Cost summary after symbol resolution
-        if stock_symbol and resolved_name:
-            final_symbol = resolved_symbol if resolved_symbol else stock_symbol
-            cost_per_share_display = ""
-            if quantity and quantity > 0 and book_cost > 0:
-                cost_per_share = book_cost / int(quantity)
-                cost_per_share_display = f" @ {format_currency(cost_per_share)}/share"
-
-            st.markdown(build_holding_summary(final_symbol, resolved_name, cost_per_share_display))
-        
-        submitted = st.form_submit_button("Add Holding", type="primary")
-        
-        if submitted:
-            # Validation
-            if not account.strip():
-                st.error("Please enter an account name.")
-            elif not stock_symbol.strip():
-                st.error("Please enter a stock symbol.")
-            elif not acquisition_date:
-                st.error("Please select a valid acquisition date.")
-            elif quantity < 1:
-                st.error("Quantity must be at least 1.")
-            elif book_cost <= 0:
-                st.error("Book cost must be greater than 0.")
-            else:
-                # Use resolved symbol (with .TO if TSX), otherwise use the entered symbol
-                final_symbol = resolved_symbol if resolved_symbol else stock_symbol.strip()
-                final_name = resolved_name or stock_symbol
-                
-                # Prepare holding data
-                holding_data = {
-                    'Account': account.strip(),
-                    'StockName': final_name.strip(),
-                    'StockSymbol': final_symbol.strip(),
-                    'Quantity': int(quantity),
-                    'BookCost': book_cost,
-                    'DateOfAcquisition': acquisition_date.strftime('%Y-%m-%d')
-                }
-                
-                # Add the holding
-                with st.spinner("Adding holding..."):
-                    success, message = calculator.add_existing_holding(holding_data)
-
-                if success:
-                    # Show detailed success message
-                    st.success(f"✅ Holding added successfully! {message}")
-                else:
-                    st.error(message)
+                st.error(message)
 
 # Page 4: Trade History
 elif page == "Trade History":
@@ -733,6 +941,9 @@ elif page == "Trade History":
             # Calculate Capital Gain/Loss for each trade
             def calculate_trade_gain_loss(row):
                 """Calculate gain/loss for a single trade row."""
+                stored_gain_loss = row.get('CapitalGainLoss')
+                if pd.notna(stored_gain_loss):
+                    return float(stored_gain_loss)
                 if row['TradeType'] == 'S':  # Sell trade only
                     try:
                         shares = int(row['SharesTraded'])
@@ -751,12 +962,52 @@ elif page == "Trade History":
                         pass
                 return None
 
+            def calculate_cost(row):
+                stored_cost = row.get('Cost')
+                if pd.notna(stored_cost):
+                    return float(stored_cost)
+                try:
+                    shares = int(row['SharesTraded'])
+                    price = float(row['PricePerShare'])
+                    commission = float(row['Commission'])
+                    if row['TradeType'] == 'B':
+                        return (shares * price) + commission
+                    if row['TradeType'] == 'S':
+                        average_at_sale = row.get('AverageCostAtSale')
+                        if pd.notna(average_at_sale):
+                            return shares * float(average_at_sale)
+                except:
+                    pass
+                return None
+
+            def calculate_gross_proceeds(row):
+                stored_gross = row.get('GrossProceeds')
+                if pd.notna(stored_gross):
+                    return float(stored_gross)
+                if row['TradeType'] == 'S':
+                    return int(row['SharesTraded']) * float(row['PricePerShare'])
+                return None
+
+            def calculate_net_proceeds(row):
+                stored_net = row.get('NetProceeds')
+                if pd.notna(stored_net):
+                    return float(stored_net)
+                if row['TradeType'] == 'S':
+                    return calculate_gross_proceeds(row) - float(row['Commission'])
+                return None
+
+            display_df['Cost'] = display_df.apply(calculate_cost, axis=1)
+            display_df['GrossProceeds'] = display_df.apply(calculate_gross_proceeds, axis=1)
+            display_df['NetProceeds'] = display_df.apply(calculate_net_proceeds, axis=1)
             display_df['CapitalGainLoss'] = display_df.apply(calculate_trade_gain_loss, axis=1)
 
             # Format columns
             display_df['SharesTraded'] = display_df['SharesTraded'].apply(format_number)
             display_df['PricePerShare'] = display_df['PricePerShare'].apply(format_currency)
-            display_df['CapitalGainLoss'] = display_df['CapitalGainLoss'].apply(lambda x: format_currency(x) if x is not None else '-')
+            display_df['Cost'] = display_df['Cost'].apply(lambda x: format_currency(x) if pd.notna(x) else '-')
+            display_df['GrossProceeds'] = display_df['GrossProceeds'].apply(lambda x: format_currency(x) if pd.notna(x) else '-')
+            display_df['NetProceeds'] = display_df['NetProceeds'].apply(lambda x: format_currency(x) if pd.notna(x) else '-')
+            display_df['CapitalGainLoss'] = display_df['CapitalGainLoss'].apply(lambda x: format_currency(x) if pd.notna(x) else '-')
             display_df['Commission'] = display_df['Commission'].apply(format_currency)
             # Handle empty dates - show blank instead of 'No Date'
             display_df['DateOfTrade'] = pd.to_datetime(display_df['DateOfTrade'], errors='coerce').apply(
@@ -772,12 +1023,20 @@ elif page == "Trade History":
                 'TradeType': 'Type',
                 'SharesTraded': 'Shares',
                 'PricePerShare': 'Price/Share',
+                'Cost': 'Cost',
+                'GrossProceeds': 'Gross Proceeds',
+                'NetProceeds': 'Net Proceeds',
                 'CapitalGainLoss': 'Gain/Loss',
                 'Commission': 'Commission'
             })
 
             # Format trade type
             display_df['Type'] = display_df['Type'].map({'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'})
+            display_df = display_df[[
+                'Account', 'Stock Name', 'Symbol', 'Date', 'Type', 'Shares',
+                'Price/Share', 'Commission', 'Cost', 'Gross Proceeds',
+                'Net Proceeds', 'Gain/Loss'
+            ]]
 
             st.dataframe(display_df, width='stretch')
 

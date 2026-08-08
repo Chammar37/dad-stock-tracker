@@ -418,9 +418,8 @@ class TestErrorRecoveryWorkflow:
 
         # 4. Verify trade history
         trades = calculator.data_manager.read_trades()
-        # Note: Current implementation adds trade to history before validation
-        # So failed trade IS recorded (known limitation)
-        assert len(trades) == 2
+        # Failed trades are validated before persistence.
+        assert len(trades) == 1
         # But consolidated wasn't updated due to validation failure
         assert record['Quantity'] == 50
 

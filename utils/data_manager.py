@@ -27,10 +27,7 @@ class DataManager:
         ]
         
         # Trades CSV headers
-        trades_headers = [
-            "Account", "StockName", "StockSymbol", "DateOfTrade", 
-            "TradeType", "SharesTraded", "PricePerShare", "Commission"
-        ]
+        trades_headers = self.trade_headers()
         
         if not os.path.exists(self.consolidated_path):
             pd.DataFrame(columns=consolidated_headers).to_csv(
@@ -53,22 +50,52 @@ class DataManager:
             # Ensure integer quantities
             if 'Quantity' in df.columns:
                 df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0).round().astype(int)
+            for column in ['AveragePricePerShare', 'CapitalGainLoss']:
+                if column in df.columns:
+                    df[column] = pd.to_numeric(df[column], errors='coerce').fillna(0.0).astype(float)
             return df
         except Exception as e:
             st.error(f"Error reading consolidated data: {e}")
             return pd.DataFrame()
     
+    @staticmethod
+    def consolidated_headers() -> List[str]:
+        """Columns used by the consolidated holdings CSV."""
+        return [
+            "Account", "StockName", "StockSymbol", "Quantity",
+            "AveragePricePerShare", "CapitalGainLoss", "DateOfAcquisition"
+        ]
+
+    @staticmethod
+    def trade_headers() -> List[str]:
+        """Columns used by the trade history CSV."""
+        return [
+            "Account", "StockName", "StockSymbol", "DateOfTrade",
+            "TradeType", "SharesTraded", "PricePerShare", "Commission",
+            "Cost", "GrossProceeds", "NetProceeds",
+            "AverageCostAtSale", "CapitalGainLoss"
+        ]
+
     def read_trades(self) -> pd.DataFrame:
         """Read the trades history data."""
         try:
             df = pd.read_csv(self.trades_path)
+            for column in self.trade_headers():
+                if column not in df.columns:
+                    df[column] = pd.NA
             # Convert date column to datetime
             if 'DateOfTrade' in df.columns:
                 df['DateOfTrade'] = pd.to_datetime(df['DateOfTrade'], errors='coerce')
             # Ensure integer shares traded
             if 'SharesTraded' in df.columns:
                 df['SharesTraded'] = pd.to_numeric(df['SharesTraded'], errors='coerce').fillna(0).round().astype(int)
-            return df
+            for column in [
+                'PricePerShare', 'Commission', 'Cost', 'GrossProceeds',
+                'NetProceeds', 'AverageCostAtSale', 'CapitalGainLoss'
+            ]:
+                if column in df.columns:
+                    df[column] = pd.to_numeric(df[column], errors='coerce')
+            return df[self.trade_headers()]
         except Exception as e:
             st.error(f"Error reading trades data: {e}")
             return pd.DataFrame()
@@ -85,6 +112,10 @@ class DataManager:
     def write_trades(self, df: pd.DataFrame) -> bool:
         """Write trades data to CSV."""
         try:
+            for column in self.trade_headers():
+                if column not in df.columns:
+                    df[column] = pd.NA
+            df = df[self.trade_headers()]
             df.to_csv(self.trades_path, index=False)
             return True
         except Exception as e:
@@ -138,11 +169,48 @@ class DataManager:
         try:
             df = self.read_consolidated()
             mask = (df['Account'] == account) & (df['StockSymbol'] == stock_symbol)
+            if not mask.any():
+                st.error(f"Consolidated record not found for {stock_symbol} in {account}")
+                return False
             updated_df = df[~mask]  # Keep everything except this record
             return self.write_consolidated(updated_df)
         except Exception as e:
             st.error(f"Error deleting consolidated record: {e}")
             return False
+
+    def validate_consolidated_record(self, record_data: Dict) -> tuple[bool, str]:
+        """Validate editable consolidated-record values before writing."""
+        required_text = ["Account", "StockName", "StockSymbol"]
+        for field in required_text:
+            if not str(record_data.get(field, "")).strip():
+                return False, f"{field} is required"
+
+        try:
+            quantity = int(record_data.get("Quantity"))
+        except (TypeError, ValueError):
+            return False, "Quantity must be a whole number"
+        if quantity < 0:
+            return False, "Quantity cannot be negative"
+
+        try:
+            average_price = float(record_data.get("AveragePricePerShare"))
+        except (TypeError, ValueError):
+            return False, "Average price/share must be a number"
+        if average_price < 0:
+            return False, "Average price/share cannot be negative"
+
+        try:
+            float(record_data.get("CapitalGainLoss", 0))
+        except (TypeError, ValueError):
+            return False, "Gain/loss must be a number"
+
+        date_value = record_data.get("DateOfAcquisition")
+        if not date_value or pd.isna(date_value):
+            return False, "Date of acquisition is required"
+        if pd.isna(pd.to_datetime(date_value, errors="coerce")):
+            return False, "Date of acquisition must be a valid date"
+
+        return True, ""
 
     def get_trades_for_account_symbol(self, account: str, stock_symbol: str) -> pd.DataFrame:
         """Get all trades for a specific account and stock symbol, sorted by date."""
@@ -169,6 +237,16 @@ class DataManager:
                 st.error("Date of acquisition is required and cannot be empty")
                 return False
 
+            candidate = {
+                "Account": account,
+                "StockSymbol": stock_symbol,
+                **updated_data,
+            }
+            is_valid, error = self.validate_consolidated_record(candidate)
+            if not is_valid:
+                st.error(error)
+                return False
+
             df = self.read_consolidated()
 
             # Find the record to update
@@ -191,6 +269,61 @@ class DataManager:
             return self.write_consolidated(df)
         except Exception as e:
             st.error(f"Error updating consolidated record: {e}")
+            return False
+
+    def replace_consolidated_record(
+        self,
+        old_account: str,
+        old_stock_symbol: str,
+        new_account: str,
+        new_stock_symbol: str,
+        updated_data: Dict,
+    ) -> bool:
+        """Atomically replace or rename a consolidated record after validation."""
+        try:
+            candidate = {
+                "Account": new_account,
+                "StockSymbol": new_stock_symbol,
+                **updated_data,
+            }
+            is_valid, error = self.validate_consolidated_record(candidate)
+            if not is_valid:
+                st.error(error)
+                return False
+
+            df = self.read_consolidated()
+            old_mask = (
+                (df["Account"] == old_account)
+                & (df["StockSymbol"] == old_stock_symbol)
+            )
+            if not old_mask.any():
+                st.error(
+                    f"Consolidated record not found for {old_stock_symbol} in {old_account}"
+                )
+                return False
+
+            new_mask = (
+                (df["Account"] == new_account)
+                & (df["StockSymbol"] == new_stock_symbol)
+            )
+            same_key = old_account == new_account and old_stock_symbol == new_stock_symbol
+            if not same_key and new_mask.any():
+                st.error(
+                    f"Consolidated record already exists for {new_stock_symbol} in {new_account}"
+                )
+                return False
+
+            replacement = {
+                "Account": new_account,
+                "StockSymbol": new_stock_symbol,
+                **updated_data,
+            }
+            for key, value in replacement.items():
+                df.loc[old_mask, key] = value
+
+            return self.write_consolidated(df)
+        except Exception as e:
+            st.error(f"Error replacing consolidated record: {e}")
             return False
     
     def get_consolidated_record(self, account: str, stock_symbol: str) -> Optional[Dict]:

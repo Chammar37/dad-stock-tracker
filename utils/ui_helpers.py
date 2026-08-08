@@ -30,6 +30,8 @@ BUTTON_STYLES_CSS = """
 </style>
 """
 
+NEW_ACCOUNT_OPTION = "Add new account..."
+
 
 def format_currency(value) -> str:
     """Format a value as currency."""
@@ -81,6 +83,73 @@ def build_available_stock_options(
     return sorted(options, key=lambda option: option[0])
 
 
+def build_stock_option_lookup(
+    options: list[tuple[str, str, int]]
+) -> dict[str, dict[str, object]]:
+    """Build lookup metadata for symbol-valued stock selectboxes."""
+    return {
+        symbol: {
+            "display": display,
+            "quantity": int(quantity),
+        }
+        for symbol, display, quantity in options
+    }
+
+
+def reset_invalid_selectbox_value(
+    session_state,
+    key: str,
+    valid_values: list[str],
+    default_value: str = "",
+) -> bool:
+    """Reset a keyed selectbox when its stored value is no longer valid."""
+    current_value = session_state.get(key, default_value)
+    if current_value not in valid_values:
+        session_state[key] = default_value
+        return True
+    return False
+
+
+def build_account_options(accounts: list[str]) -> list[str]:
+    """Return account select options with a create-new choice."""
+    return list(accounts) + [NEW_ACCOUNT_OPTION]
+
+
+def resolve_account_input(selected_account: str, new_account: str = "") -> str:
+    """Resolve an existing-or-new account selection into the account name."""
+    if selected_account == NEW_ACCOUNT_OPTION:
+        return new_account.strip()
+    return str(selected_account or "").strip()
+
+
+def find_existing_holding_by_symbol(
+    df: pd.DataFrame, account: str, symbol: str
+) -> Optional[dict]:
+    """Find an existing holding by account and entered symbol."""
+    if df.empty or not account or not symbol:
+        return None
+
+    entered = symbol.strip().upper()
+    filtered_df = df[df["Account"].astype(str) == account]
+    exact_matches = []
+    base_matches = []
+
+    for _, row in filtered_df.iterrows():
+        canonical = str(row["StockSymbol"]).strip().upper()
+        if entered == canonical:
+            exact_matches.append(row.to_dict())
+            continue
+        if "." not in entered and entered == canonical.split(".", 1)[0]:
+            base_matches.append(row.to_dict())
+
+    if exact_matches:
+        return exact_matches[0]
+    if len(base_matches) == 1:
+        return base_matches[0]
+
+    return None
+
+
 def add_row_numbers(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy with one-based display row numbers."""
     display_df = df.copy()
@@ -94,3 +163,87 @@ def build_holding_summary(
     """Build the bold grouped Name/Symbol/detail summary shown in forms."""
     suffix = f"{detail}" if detail else ""
     return f"**📊 {symbol} - {name}{suffix}**"
+
+
+def calculate_cost_per_share(quantity, book_cost) -> Optional[float]:
+    """Calculate cost/share for a pre-populated holding when inputs are valid."""
+    try:
+        quantity_value = int(quantity)
+        book_cost_value = float(book_cost)
+    except (TypeError, ValueError):
+        return None
+
+    if quantity_value <= 0 or book_cost_value <= 0:
+        return None
+    return book_cost_value / quantity_value
+
+
+def build_trade_quantity_context(
+    trade_type: str, account: str, stock_symbol: str
+) -> tuple[str, str, str]:
+    """Build the identity that controls when trade quantity should reset."""
+    return (
+        str(trade_type or "").strip().upper(),
+        str(account or "").strip(),
+        str(stock_symbol or "").strip().upper(),
+    )
+
+
+def normalize_trade_quantity_state(
+    session_state,
+    context: tuple[str, str, str],
+    quantity_key: str = "shares_input",
+    context_key: str = "shares_input_context",
+) -> bool:
+    """
+    Reset trade quantity to integer 1 when the selected trade context changes.
+
+    Returns True when a reset happened. Same-context reruns, including preview
+    submissions, keep the user's current quantity.
+    """
+    previous_context = session_state.get(context_key)
+    if previous_context != context:
+        session_state[quantity_key] = 1
+        session_state[context_key] = context
+        return True
+
+    value = session_state.get(quantity_key, 1)
+    try:
+        session_state[quantity_key] = max(1, int(value))
+    except (TypeError, ValueError):
+        session_state[quantity_key] = 1
+    return False
+
+
+TRADE_ENTRY_STATE_KEYS = [
+    "trade_account",
+    "trade_new_account",
+    "buy_stock_symbol",
+    "buy_stock_name",
+    "sell_stock_select",
+    "shares_input",
+    "shares_input_context",
+    "trade_price_per_share",
+    "trade_commission",
+]
+
+PREPOPULATE_STATE_KEYS = [
+    "prepopulate_account",
+    "prepopulate_new_account",
+    "prepopulate_stock_symbol",
+    "prepopulate_quantity",
+    "prepopulate_book_cost",
+    "prepopulate_date",
+]
+
+
+def reset_trade_entry_state(session_state) -> None:
+    """Clear trade-entry widgets after a successful processed trade."""
+    for key in TRADE_ENTRY_STATE_KEYS:
+        session_state.pop(key, None)
+
+
+def reset_prepopulate_state(session_state) -> None:
+    """Clear pre-populate widgets after a successful add."""
+    for key in PREPOPULATE_STATE_KEYS:
+        session_state.pop(key, None)

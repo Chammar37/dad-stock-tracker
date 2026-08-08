@@ -8,6 +8,99 @@ class TradeCalculator:
     
     def __init__(self, data_manager: DataManager):
         self.data_manager = data_manager
+
+    def validate_trade(self, trade_data: Dict) -> Tuple[bool, str]:
+        """Validate trade data before writing history or holdings."""
+        trade_type = trade_data.get('TradeType', '').upper()
+        if trade_type not in {'B', 'S', 'T'}:
+            return False, f"Unknown trade type: {trade_type}. Use B (Buy), S (Sell), or T (Transfer)"
+
+        for field in ['Account', 'StockSymbol', 'DateOfTrade']:
+            if not str(trade_data.get(field, '')).strip():
+                return False, f"{field} is required"
+
+        try:
+            shares_traded = int(trade_data.get('SharesTraded'))
+        except (TypeError, ValueError):
+            return False, "Shares traded must be a whole number"
+        if shares_traded < 1:
+            return False, f"Shares traded must be greater than zero. You entered {trade_data.get('SharesTraded')}"
+
+        try:
+            price_per_share = float(trade_data.get('PricePerShare'))
+        except (TypeError, ValueError):
+            return False, "Price per share must be a number"
+        if trade_type != 'T' and price_per_share <= 0:
+            return False, "Price per share must be greater than 0"
+        if trade_type == 'T' and price_per_share < 0:
+            return False, "Price per share cannot be negative"
+
+        try:
+            commission = float(trade_data.get('Commission', 0))
+        except (TypeError, ValueError):
+            return False, "Commission must be a number"
+        if commission < 0:
+            return False, "Commission cannot be negative"
+
+        if trade_type == 'B' and not str(trade_data.get('StockName', '')).strip():
+            record = self.data_manager.get_consolidated_record(
+                trade_data['Account'], trade_data['StockSymbol']
+            )
+            if not record:
+                return False, "Stock name is required for new buy trades"
+
+        if trade_type == 'S':
+            record = self.data_manager.get_consolidated_record(
+                trade_data['Account'], trade_data['StockSymbol']
+            )
+            if not record:
+                return False, f"No existing holdings found for {trade_data['StockSymbol']} in {trade_data['Account']}"
+            current_quantity = int(record['Quantity'])
+            if shares_traded > current_quantity:
+                return False, f"Insufficient shares. You have {current_quantity} shares, trying to sell {shares_traded}"
+
+        return True, ""
+
+    def enrich_trade_financials(self, trade_data: Dict) -> Dict:
+        """Add display/audit financial fields to a trade history row."""
+        enriched = trade_data.copy()
+        trade_type = enriched.get('TradeType', '').upper()
+        shares_traded = int(enriched['SharesTraded'])
+        price_per_share = float(enriched['PricePerShare'])
+        commission = float(enriched.get('Commission', 0))
+
+        cost = None
+        gross_proceeds = None
+        net_proceeds = None
+        average_cost_at_sale = None
+        capital_gain_loss = None
+
+        if trade_type == 'B':
+            cost = (shares_traded * price_per_share) + commission
+        elif trade_type == 'S':
+            record = self.data_manager.get_consolidated_record(
+                enriched['Account'], enriched['StockSymbol']
+            )
+            average_cost_at_sale = float(record['AveragePricePerShare'])
+            gross_proceeds = shares_traded * price_per_share
+            net_proceeds = gross_proceeds - commission
+            cost = shares_traded * average_cost_at_sale
+            capital_gain_loss = net_proceeds - cost
+
+        enriched.update({
+            'Cost': round(cost, 2) if cost is not None else None,
+            'GrossProceeds': round(gross_proceeds, 2) if gross_proceeds is not None else None,
+            'NetProceeds': round(net_proceeds, 2) if net_proceeds is not None else None,
+            'AverageCostAtSale': (
+                round(average_cost_at_sale, 4)
+                if average_cost_at_sale is not None else None
+            ),
+            'CapitalGainLoss': (
+                round(capital_gain_loss, 2)
+                if capital_gain_loss is not None else None
+            ),
+        })
+        return enriched
     
     def process_buy_trade(self, trade_data: Dict) -> Tuple[bool, str]:
         """
@@ -30,6 +123,10 @@ class TradeCalculator:
             existing_record = self.data_manager.get_consolidated_record(account, stock_symbol)
             
             if existing_record:
+                stock_name = (
+                    str(trade_data.get('StockName', '')).strip()
+                    or existing_record['StockName']
+                )
                 # Existing stock - update calculations
                 current_quantity = int(existing_record['Quantity'])
                 current_avg_price = float(existing_record['AveragePricePerShare'])
@@ -43,7 +140,7 @@ class TradeCalculator:
                 
                 # Update consolidated record
                 updated_data = {
-                    'StockName': trade_data['StockName'],
+                    'StockName': stock_name,
                     'Quantity': int(new_quantity),
                     'AveragePricePerShare': round(new_avg_price, 4),
                     'CapitalGainLoss': current_capital_gain_loss,  # No change for buy
@@ -107,10 +204,13 @@ class TradeCalculator:
                 return False, f"Insufficient shares. You have {current_quantity} shares, trying to sell {shares_traded}"
             
             # Calculate new values
-            net_proceeds = (shares_traded * price_per_share) - commission
-            trade_capital_gain_loss = net_proceeds - (shares_traded * current_avg_price)
+            enriched_trade = self.enrich_trade_financials(trade_data)
+            net_proceeds = float(enriched_trade['NetProceeds'])
+            trade_capital_gain_loss = float(enriched_trade['CapitalGainLoss'])
             new_quantity = int(current_quantity - shares_traded)
             new_capital_gain_loss = current_capital_gain_loss + trade_capital_gain_loss
+
+            trade_data.update(enriched_trade)
             
             # Update consolidated record
             updated_data = {
@@ -149,21 +249,33 @@ class TradeCalculator:
         Process any type of trade based on the trade type.
         """
         trade_type = trade_data.get('TradeType', '').upper()
-        
-        # First, add the trade to the trade history
-        trade_success = self.data_manager.add_trade(trade_data)
-        if not trade_success:
-            return False, "Failed to record trade in trade history"
-        
+
+        is_valid, validation_error = self.validate_trade(trade_data)
+        if not is_valid:
+            return False, validation_error
+
+        original_consolidated = self.data_manager.read_consolidated()
+
         # Then process based on trade type
         if trade_type == 'B':
-            return self.process_buy_trade(trade_data)
+            trade_data.update(self.enrich_trade_financials(trade_data))
+            process_success, message = self.process_buy_trade(trade_data)
         elif trade_type == 'S':
-            return self.process_sell_trade(trade_data)
+            process_success, message = self.process_sell_trade(trade_data)
         elif trade_type == 'T':
-            return self.process_transfer_trade(trade_data)
+            process_success, message = self.process_transfer_trade(trade_data)
         else:
             return False, f"Unknown trade type: {trade_type}. Use B (Buy), S (Sell), or T (Transfer)"
+
+        if not process_success:
+            return False, message
+
+        trade_success = self.data_manager.add_trade(trade_data)
+        if not trade_success:
+            self.data_manager.write_consolidated(original_consolidated)
+            return False, "Failed to record trade in trade history"
+
+        return True, message
     
     def add_existing_holding(self, holding_data: Dict) -> Tuple[bool, str]:
         """
@@ -350,8 +462,14 @@ class TradeCalculator:
             new_quantity = current_quantity - shares_traded
             new_capital_gain_loss = current_capital_gain_loss + trade_capital_gain_loss
 
+            gross_proceeds = shares_traded * price_per_share
+            cost_basis = shares_traded * current_avg_price
+
             return True, {
+                'gross_proceeds': gross_proceeds,
                 'net_proceeds': net_proceeds,
+                'cost_basis': cost_basis,
+                'average_cost_at_sale': current_avg_price,
                 'trade_gain_loss': trade_capital_gain_loss,
                 'new_quantity': new_quantity,
                 'new_total_gain_loss': new_capital_gain_loss
