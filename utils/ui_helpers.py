@@ -27,6 +27,11 @@ BUTTON_STYLES_CSS = """
     div[data-testid="column"]:last-child button[kind="primary"]:hover {
         background-color: #c82333 !important;
     }
+
+    /* Numeric values are entered directly; hide increment/decrement steppers. */
+    div[data-testid="stNumberInput"] button {
+        display: none !important;
+    }
 </style>
 """
 

@@ -31,6 +31,11 @@ def test_preview_and_process_button_styles_are_defined():
     assert "background-color: #dc3545" in BUTTON_STYLES_CSS
 
 
+def test_number_input_stepper_buttons_are_hidden():
+    assert 'div[data-testid="stNumberInput"] button' in BUTTON_STYLES_CSS
+    assert "display: none !important" in BUTTON_STYLES_CSS
+
+
 def test_format_number_displays_zero_without_decimal_places():
     assert format_number(0) == "0"
     assert format_number(0.0) == "0"
