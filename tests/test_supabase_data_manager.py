@@ -155,6 +155,36 @@ def test_invalid_sell_does_not_insert_trade(supabase_manager):
     assert supabase_manager.get_consolidated_record("TFSA", "AAPL")["Quantity"] == 10
 
 
+def test_sell_updates_legacy_holding_without_acquisition_date(supabase_manager):
+    assert supabase_manager.write_consolidated(pd.DataFrame([{
+        "Account": "Personal",
+        "StockName": "NUTRIEN LTD",
+        "StockSymbol": "NTR.TO",
+        "Quantity": 200,
+        "AveragePricePerShare": 80.00,
+        "CapitalGainLoss": 0.0,
+        "DateOfAcquisition": None,
+    }]))
+    calculator = TradeCalculator(supabase_manager)
+
+    success, message = calculator.process_trade({
+        "Account": "Personal",
+        "StockName": "NUTRIEN LTD",
+        "StockSymbol": "NTR.TO",
+        "DateOfTrade": "2026-01-14",
+        "TradeType": "S",
+        "SharesTraded": 100,
+        "PricePerShare": 91.80,
+        "Commission": 9.99,
+    })
+
+    assert success, message
+    holding = supabase_manager.get_consolidated_record("Personal", "NTR.TO")
+    assert holding["Quantity"] == 100
+    assert holding["DateOfAcquisition"] is None
+    assert len(supabase_manager.read_trades()) == 1
+
+
 def test_write_methods_replace_existing_rows(supabase_manager):
     consolidated = pd.DataFrame([{
         "Account": "TFSA",

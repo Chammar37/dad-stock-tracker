@@ -114,6 +114,37 @@ class TestSellTradeProcessing:
         record = calculator.data_manager.get_consolidated_record('TFSA', 'AAPL')
         assert record['AveragePricePerShare'] == original_avg
 
+    def test_process_sell_trade_allows_legacy_holding_without_acquisition_date(
+        self, calculator
+    ):
+        calculator.data_manager.write_consolidated(pd.DataFrame([{
+            'Account': 'Personal',
+            'StockName': 'NUTRIEN LTD',
+            'StockSymbol': 'NTR.TO',
+            'Quantity': 200,
+            'AveragePricePerShare': 80.00,
+            'CapitalGainLoss': 0.0,
+            'DateOfAcquisition': None,
+        }]))
+        trade = {
+            'Account': 'Personal',
+            'StockName': 'NUTRIEN LTD',
+            'StockSymbol': 'NTR.TO',
+            'DateOfTrade': '2026-01-14',
+            'TradeType': 'S',
+            'SharesTraded': 100,
+            'PricePerShare': 91.80,
+            'Commission': 9.99,
+        }
+
+        success, message = calculator.process_trade(trade)
+
+        assert success, message
+        holding = calculator.data_manager.get_consolidated_record('Personal', 'NTR.TO')
+        assert holding['Quantity'] == 100
+        assert pd.isna(holding['DateOfAcquisition'])
+        assert len(calculator.data_manager.read_trades()) == 1
+
     def test_process_sell_trade_insufficient_shares(self, calculator, populated_data_manager):
         """Test selling more shares than owned."""
         sell_too_many = {

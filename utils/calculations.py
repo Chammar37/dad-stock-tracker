@@ -167,7 +167,10 @@ class TradeCalculator:
             
             # Update consolidated record
             success = self.data_manager.update_consolidated_record(
-                account, stock_symbol, updated_data
+                account,
+                stock_symbol,
+                updated_data,
+                allow_missing_acquisition_date=bool(existing_record),
             )
             
             if success:
@@ -228,7 +231,10 @@ class TradeCalculator:
             
             # Update consolidated record
             success = self.data_manager.update_consolidated_record(
-                account, stock_symbol, updated_data
+                account,
+                stock_symbol,
+                updated_data,
+                allow_missing_acquisition_date=True,
             )
             
             if success:

@@ -191,7 +191,12 @@ class DataManager:
             st.error(f"Error deleting consolidated record: {e}")
             return False
 
-    def validate_consolidated_record(self, record_data: Dict) -> tuple[bool, str]:
+    def validate_consolidated_record(
+        self,
+        record_data: Dict,
+        *,
+        allow_missing_acquisition_date: bool = False,
+    ) -> tuple[bool, str]:
         """Validate editable consolidated-record values before writing."""
         required_text = ["Account", "StockName", "StockSymbol"]
         for field in required_text:
@@ -219,8 +224,9 @@ class DataManager:
 
         date_value = record_data.get("DateOfAcquisition")
         if not date_value or pd.isna(date_value):
-            return False, "Date of acquisition is required"
-        if pd.isna(pd.to_datetime(date_value, errors="coerce")):
+            if not allow_missing_acquisition_date:
+                return False, "Date of acquisition is required"
+        elif pd.isna(pd.to_datetime(date_value, errors="coerce")):
             return False, "Date of acquisition must be a valid date"
 
         return True, ""
@@ -241,21 +247,25 @@ class DataManager:
             st.error(f"Error getting trades for account/symbol: {e}")
             return pd.DataFrame()
     
-    def update_consolidated_record(self, account: str, stock_symbol: str,
-                                 updated_data: Dict) -> bool:
+    def update_consolidated_record(
+        self,
+        account: str,
+        stock_symbol: str,
+        updated_data: Dict,
+        *,
+        allow_missing_acquisition_date: bool = False,
+    ) -> bool:
         """Update a specific consolidated record."""
         try:
-            # Validate that DateOfAcquisition exists and is not empty
-            if 'DateOfAcquisition' in updated_data and not updated_data['DateOfAcquisition']:
-                st.error("Date of acquisition is required and cannot be empty")
-                return False
-
             candidate = {
                 "Account": account,
                 "StockSymbol": stock_symbol,
                 **updated_data,
             }
-            is_valid, error = self.validate_consolidated_record(candidate)
+            is_valid, error = self.validate_consolidated_record(
+                candidate,
+                allow_missing_acquisition_date=allow_missing_acquisition_date,
+            )
             if not is_valid:
                 st.error(error)
                 return False
