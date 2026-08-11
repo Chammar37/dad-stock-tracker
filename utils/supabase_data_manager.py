@@ -366,8 +366,17 @@ class SupabaseDataManager:
             st.error(f"Error deleting consolidated record: {e}")
             return False
 
-    def validate_consolidated_record(self, record_data: Dict) -> tuple[bool, str]:
-        return DataManager.validate_consolidated_record(self, record_data)
+    def validate_consolidated_record(
+        self,
+        record_data: Dict,
+        *,
+        allow_missing_acquisition_date: bool = False,
+    ) -> tuple[bool, str]:
+        return DataManager.validate_consolidated_record(
+            self,
+            record_data,
+            allow_missing_acquisition_date=allow_missing_acquisition_date,
+        )
 
     def get_trades_for_account_symbol(self, account: str, stock_symbol: str) -> pd.DataFrame:
         try:
@@ -396,14 +405,20 @@ class SupabaseDataManager:
             st.error(f"Error getting trades for account/symbol: {e}")
             return pd.DataFrame(columns=self.TRADE_COLUMNS)
 
-    def update_consolidated_record(self, account: str, stock_symbol: str, updated_data: Dict) -> bool:
+    def update_consolidated_record(
+        self,
+        account: str,
+        stock_symbol: str,
+        updated_data: Dict,
+        *,
+        allow_missing_acquisition_date: bool = False,
+    ) -> bool:
         try:
-            if "DateOfAcquisition" in updated_data and not updated_data["DateOfAcquisition"]:
-                st.error("Date of acquisition is required and cannot be empty")
-                return False
-
             candidate = {"Account": account, "StockSymbol": stock_symbol, **updated_data}
-            is_valid, error = self.validate_consolidated_record(candidate)
+            is_valid, error = self.validate_consolidated_record(
+                candidate,
+                allow_missing_acquisition_date=allow_missing_acquisition_date,
+            )
             if not is_valid:
                 st.error(error)
                 return False
