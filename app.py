@@ -40,13 +40,13 @@ from utils.ui_helpers import (
 
 # Chart Theme Configuration
 CHART_COLORS = {
-    'primary': '#4A90E2',
-    'primary_transparent': 'rgba(74, 144, 226, 0.1)',
-    'primary_semi': 'rgba(74, 144, 226, 0.6)',
-    'primary_dark': 'rgba(74, 144, 226, 0.8)',
-    'title': '#2C3E50',
-    'text': '#7F8C8D',
-    'grid': 'rgba(127, 140, 141, 0.2)'
+    'primary': '#818CF8',
+    'primary_transparent': 'rgba(129, 140, 248, 0.12)',
+    'primary_semi': 'rgba(129, 140, 248, 0.62)',
+    'primary_dark': 'rgba(99, 102, 241, 0.9)',
+    'title': '#F4F7FB',
+    'text': '#AAB6C8',
+    'grid': 'rgba(148, 163, 184, 0.16)'
 }
 
 CHART_FONTS = {
@@ -63,7 +63,7 @@ st.set_page_config(
     page_title="Stock Tracker",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
 
 # Custom CSS for button colors
@@ -110,6 +110,7 @@ except Exception:
 
 # Sidebar navigation
 st.sidebar.title("📈 Stock Tracker")
+st.sidebar.caption("Portfolio dashboard")
 page = st.sidebar.selectbox(
     "Navigate",
     ["Consolidated Record", "Trade Entry", "Pre-populate Database", "Trade History", "Stock Charts"]
@@ -326,8 +327,9 @@ if page == "Consolidated Record":
             st.metric("Total Gain/Loss", format_currency(total_gain_loss))
         
         # Filters
-        st.subheader("Filters")
-        col1, col2 = st.columns(2)
+        filter_panel = st.container(border=True)
+        filter_panel.subheader("Filters")
+        col1, col2 = filter_panel.columns(2)
         
         with col1:
             accounts = ['All'] + data_manager.get_accounts()
@@ -370,8 +372,9 @@ if page == "Consolidated Record":
 
             st.dataframe(display_df, width='stretch')
 
-            st.subheader("Modify Consolidated Records")
-            st.caption("Manual edits replace the selected consolidated row. Trade-history rebuilds can overwrite these edits for rows rebuilt from trades.")
+            management_panel = st.container(border=True)
+            management_panel.subheader("Modify Consolidated Records")
+            management_panel.caption("Manual edits replace the selected consolidated row. Trade-history rebuilds can overwrite these edits for rows rebuilt from trades.")
 
             edit_options = []
             for idx in filtered_df.index:
@@ -379,7 +382,7 @@ if page == "Consolidated Record":
                 label = f"{row['Account']} | {row['StockSymbol']} | {row['StockName']}"
                 edit_options.append((idx, label))
 
-            selected_record = st.selectbox(
+            selected_record = management_panel.selectbox(
                 "Select record to modify",
                 options=[None] + edit_options,
                 format_func=lambda option: "Select a record..." if option is None else option[1],
@@ -390,7 +393,7 @@ if page == "Consolidated Record":
                 selected_idx = selected_record[0]
                 row = df.loc[selected_idx]
 
-                with st.form("edit_consolidated_form"):
+                with management_panel.form("edit_consolidated_form"):
                     edit_col1, edit_col2 = st.columns(2)
                     with edit_col1:
                         edit_account = st.text_input("Account", value=str(row['Account']))
@@ -455,11 +458,11 @@ if page == "Consolidated Record":
                             st.success("Consolidated record updated")
                             st.rerun()
 
-                confirm_delete = st.checkbox(
+                confirm_delete = management_panel.checkbox(
                     f"Confirm delete {row['StockSymbol']} from {row['Account']}",
                     key=f"confirm_delete_{selected_idx}",
                 )
-                if st.button("Delete Record", type="primary", disabled=not confirm_delete):
+                if management_panel.button("Delete Record", type="tertiary", disabled=not confirm_delete):
                     deleted = data_manager.delete_consolidated_record(
                         str(row['Account']), str(row['StockSymbol'])
                     )
@@ -486,9 +489,10 @@ elif page == "Trade Entry":
     trade_type = st.selectbox("Trade Type", ["B", "S", "T"], 
                             format_func=lambda x: {"B": "Buy", "S": "Sell", "T": "Transfer"}[x])
     
-    st.subheader("Trade Details")
+    details_panel = st.container(border=True)
+    details_panel.subheader("Trade Details")
 
-    selector_col1, selector_col2 = st.columns(2)
+    selector_col1, selector_col2 = details_panel.columns(2)
 
     with selector_col1:
         # Account selection lives outside the form so Sell options refresh immediately.
@@ -609,7 +613,7 @@ elif page == "Trade Entry":
     normalize_trade_quantity_state(st.session_state, quantity_context)
 
     with st.form("trade_form", clear_on_submit=False):
-        form_col1, form_col2 = st.columns(2)
+        form_col1, form_col2, form_col3, form_col4 = st.columns(4)
 
         with form_col1:
             trade_date = st.date_input("Date of Trade", value=date.today())
@@ -633,6 +637,7 @@ elif page == "Trade Entry":
                 key="shares_input"
             )
 
+        with form_col3:
             price_per_share = st.number_input(
                 "Price per Share ($)",
                 min_value=0.0,
@@ -640,6 +645,8 @@ elif page == "Trade Entry":
                 format="%.2f",
                 key="trade_price_per_share",
             )
+
+        with form_col4:
             commission = st.number_input(
                 "Commission ($)",
                 min_value=0.0,
@@ -707,11 +714,12 @@ elif page == "Trade Entry":
                         with col_a:
                             st.metric("Total Cost of Trade", format_currency(preview['cost_of_trade']))
                         with col_b:
-                            st.metric("New Total Shares", f"{preview['new_quantity']:,}")
+                            st.metric("Traded Shares", format_number(preview['traded_shares']))
                         with col_c:
                             st.metric("New Avg Price/Share", format_currency(preview['new_avg_price']))
                         with col_d:
                             st.metric("New Book Value", format_currency(preview['new_book_value']))
+                        st.caption(f"Total shares after trade: {format_number(preview['new_quantity'])}")
                     except Exception as e:
                         st.error(f"Error calculating preview: {str(e)}")
 
@@ -737,10 +745,10 @@ elif page == "Trade Entry":
                         with col_b:
                             st.metric("Net Proceeds", format_currency(preview['net_proceeds']))
                         with col_c:
-                            st.metric("Cost", format_currency(preview['cost_basis']))
+                            st.metric("Traded Shares", format_number(preview['traded_shares']))
                         with col_d:
                             st.metric("Trade Gain/Loss", format_currency(preview['trade_gain_loss']))
-                        st.caption(f"Remaining quantity: {preview['new_quantity']} | Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
+                        st.caption(f"Cost basis: {format_currency(preview['cost_basis'])} | Remaining quantity: {format_number(preview['new_quantity'])} | Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
 
         if submitted:
             # shares_traded already has the correct value from the widget
@@ -813,9 +821,10 @@ elif page == "Pre-populate Database":
         st.success(st.session_state.prepopulate_success_message)
         del st.session_state.prepopulate_success_message
 
-    st.subheader("Existing Holding Details")
+    holding_panel = st.container(border=True)
+    holding_panel.subheader("Existing Holding Details")
 
-    col1, col2 = st.columns(2)
+    col1, col2 = holding_panel.columns(2)
 
     with col1:
         existing_accounts = data_manager.get_accounts()
@@ -879,13 +888,13 @@ elif page == "Pre-populate Database":
             if cost_per_share is not None else ""
         )
 
-        st.markdown(build_holding_summary(
+        holding_panel.markdown(build_holding_summary(
             final_symbol,
             resolved_name,
             cost_per_share_display,
         ))
 
-    submitted = st.button("Add Holding", type="primary")
+    submitted = holding_panel.button("Add Holding", type="primary")
 
     if submitted:
         if not account.strip():
@@ -940,8 +949,9 @@ elif page == "Trade History":
         st.info("No trades found. Use 'Trade Entry' to record trades.")
     else:
         # Filters
-        st.subheader("Filters")
-        col1, col2, col3 = st.columns(3)
+        filter_panel = st.container(border=True)
+        filter_panel.subheader("Filters")
+        col1, col2, col3 = filter_panel.columns(3)
 
         with col1:
             accounts = ['All'] + data_manager.get_accounts()
@@ -1016,7 +1026,7 @@ elif page == "Trade History":
                 stored_gross = row.get('GrossProceeds')
                 if pd.notna(stored_gross):
                     return float(stored_gross)
-                if row['TradeType'] == 'S':
+                if row['TradeType'] in ['B', 'S']:
                     return int(row['SharesTraded']) * float(row['PricePerShare'])
                 return None
 
@@ -1024,6 +1034,8 @@ elif page == "Trade History":
                 stored_net = row.get('NetProceeds')
                 if pd.notna(stored_net):
                     return float(stored_net)
+                if row['TradeType'] == 'B':
+                    return calculate_gross_proceeds(row) + float(row['Commission'])
                 if row['TradeType'] == 'S':
                     return calculate_gross_proceeds(row) - float(row['Commission'])
                 return None
@@ -1051,7 +1063,7 @@ elif page == "Trade History":
                 'Account': 'Account',
                 'StockName': 'Stock Name',
                 'StockSymbol': 'Symbol',
-                'DateOfTrade': 'Date',
+                'DateOfTrade': 'Trade Date',
                 'TradeType': 'Type',
                 'SharesTraded': 'Shares',
                 'PricePerShare': 'Price/Share',
@@ -1065,7 +1077,7 @@ elif page == "Trade History":
             # Format trade type
             display_df['Type'] = display_df['Type'].map({'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'})
             display_df = display_df[[
-                'Account', 'Stock Name', 'Symbol', 'Date', 'Type', 'Shares',
+                'Account', 'Stock Name', 'Symbol', 'Trade Date', 'Type', 'Shares',
                 'Price/Share', 'Commission', 'Cost', 'Gross Proceeds',
                 'Net Proceeds', 'Gain/Loss'
             ]]
@@ -1073,8 +1085,9 @@ elif page == "Trade History":
             st.dataframe(display_df, width='stretch')
 
             # Delete trade section
-            st.subheader("Delete Trade")
-            st.info("ℹ️ Deleting a trade will automatically recalculate your consolidated holdings by replaying all remaining trades in order. This ensures 100% accurate calculations.")
+            delete_panel = st.container(border=True)
+            delete_panel.subheader("Delete Trade")
+            delete_panel.info("ℹ️ Deleting a trade will automatically recalculate your consolidated holdings by replaying all remaining trades in order. This ensures 100% accurate calculations.")
 
             # Create a dropdown with trade descriptions
             trade_options = []
@@ -1088,7 +1101,7 @@ elif page == "Trade History":
                 trade_options.append((idx, description))
 
             if trade_options:
-                selected_trade = st.selectbox(
+                selected_trade = delete_panel.selectbox(
                     "Select trade to delete",
                     options=[None] + trade_options,
                     format_func=lambda x: "Select a trade..." if x is None else x[1],
@@ -1096,9 +1109,9 @@ elif page == "Trade History":
                 )
 
                 if selected_trade is not None:
-                    col1, col2 = st.columns([1, 4])
+                    col1, col2 = delete_panel.columns([1, 4])
                     with col1:
-                        if st.button("Delete Trade", type="primary"):
+                        if st.button("Delete Trade", type="tertiary"):
                             trade_idx = selected_trade[0]
                             with st.spinner("Deleting trade and rebuilding holdings..."):
                                 success, message = calculator.delete_trade_and_rebuild(trade_idx)
@@ -1110,8 +1123,9 @@ elif page == "Trade History":
                                 st.error(f"❌ {message}")
 
             # Summary statistics
-            st.subheader("Summary")
-            col1, col2, col3 = st.columns(3)
+            summary_panel = st.container(border=True)
+            summary_panel.subheader("Summary")
+            col1, col2, col3 = summary_panel.columns(3)
 
             with col1:
                 total_trades = len(filtered_df)
@@ -1142,7 +1156,8 @@ elif page == "Stock Charts":
         symbols = df['StockSymbol'].unique().tolist()
         
         # Timeframe selection
-        col1, col2 = st.columns([1, 3])
+        selector_panel = st.container(border=True)
+        col1, col2 = selector_panel.columns([1, 3])
         
         with col1:
             timeframe = st.selectbox(
@@ -1315,5 +1330,13 @@ elif page == "Stock Charts":
                 values='Current Value', 
                 names='Symbol',
                 title="Portfolio Allocation by Value"
+            )
+            fig_pie.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color=CHART_COLORS['text']),
+                title_font=CHART_FONTS['title_medium'],
+                margin=dict(l=32, r=32, t=64, b=32),
+                legend=dict(font=CHART_FONTS['tick_large']),
             )
             st.plotly_chart(fig_pie, use_container_width=True)

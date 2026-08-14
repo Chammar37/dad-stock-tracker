@@ -39,6 +39,7 @@ class TestBuyPreviewCalculations:
         )
 
         # Expected: (15050 + 8009.99) / 150 = 153.7333
+        assert preview['traded_shares'] == 50
         assert preview['new_quantity'] == 150
         assert abs(preview['new_avg_price'] - 153.7333) < 0.01
         assert abs(preview['new_book_value'] - 23059.99) < 0.01
@@ -76,6 +77,7 @@ class TestSellPreviewCalculations:
 
         assert success
         assert error == ""
+        assert preview['traded_shares'] == 25
         assert abs(preview['net_proceeds'] - 4365.01) < 0.01
         assert abs(preview['trade_gain_loss'] - 602.51) < 0.01
         assert preview['new_quantity'] == 75
