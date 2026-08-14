@@ -7,30 +7,220 @@ import pandas as pd
 
 BUTTON_STYLES_CSS = """
 <style>
-    /* Green Preview buttons (secondary type) */
-    div[data-testid="column"]:first-child button[kind="secondary"] {
-        background-color: #28a745 !important;
-        color: white !important;
-        font-weight: bold !important;
-        border: none !important;
-    }
-    div[data-testid="column"]:first-child button[kind="secondary"]:hover {
-        background-color: #218838 !important;
+    :root {
+        --dst-bg: #0b1020;
+        --dst-surface: #121a2c;
+        --dst-surface-raised: #172136;
+        --dst-border: #293550;
+        --dst-text: #f4f7fb;
+        --dst-muted: #9aa8bd;
+        --dst-brand: #6366f1;
+        --dst-brand-hover: #7c83f7;
+        --dst-positive: #34d399;
+        --dst-negative: #f87171;
+        --dst-radius: 12px;
     }
 
-    /* Red Process Trade buttons (primary type) */
-    div[data-testid="column"]:last-child button[kind="primary"] {
-        background-color: #dc3545 !important;
-        color: white !important;
-        border: none !important;
+    /* Application shell */
+    .stApp {
+        background: var(--dst-bg);
+        color: var(--dst-text);
     }
-    div[data-testid="column"]:last-child button[kind="primary"]:hover {
-        background-color: #c82333 !important;
+    [data-testid="stAppViewContainer"] > .main .block-container {
+        max-width: 1440px;
+        padding-top: 2rem;
+        padding-bottom: 4rem;
+    }
+    [data-testid="stSidebar"] {
+        background: #0e1526;
+        border-right: 1px solid var(--dst-border);
+    }
+    [data-testid="stSidebar"] [data-testid="stHeadingWithActionElements"] h1 {
+        font-size: 1.22rem !important;
+        line-height: 1.3 !important;
+        letter-spacing: -0.02em !important;
+    }
+    h1, h2, h3, [data-testid="stMarkdownContainer"] strong {
+        color: var(--dst-text);
+    }
+    h1 {
+        font-size: clamp(1.8rem, 3vw, 2.35rem) !important;
+        letter-spacing: -0.035em !important;
+        margin-bottom: 0.2rem !important;
+    }
+    h2, h3 {
+        letter-spacing: -0.02em !important;
+    }
+    h3 {
+        font-size: 1.08rem !important;
+        margin-top: 0.65rem !important;
+    }
+    [data-testid="stCaptionContainer"],
+    [data-testid="stMarkdownContainer"] p {
+        color: var(--dst-muted);
+    }
+
+    /* Panels, forms, and table containment */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: var(--dst-border) !important;
+        border-radius: var(--dst-radius) !important;
+        background: var(--dst-surface) !important;
+    }
+    [data-testid="stForm"] {
+        padding: 1.25rem !important;
+        border: 1px solid var(--dst-border) !important;
+        border-radius: var(--dst-radius) !important;
+        background: var(--dst-surface) !important;
+    }
+    [data-testid="stDataFrame"],
+    [data-testid="stPlotlyChart"] {
+        border: 1px solid var(--dst-border);
+        border-radius: var(--dst-radius);
+        overflow: hidden;
+        background: var(--dst-surface);
+    }
+    [data-testid="stPlotlyChart"] .modebar {
+        padding: 0.25rem !important;
+        border: 1px solid var(--dst-border) !important;
+        border-radius: 8px !important;
+        background: rgba(18, 26, 44, 0.92) !important;
+    }
+    [data-testid="stPlotlyChart"] .modebar-btn path {
+        fill: var(--dst-muted) !important;
+    }
+    [data-testid="stPlotlyChart"] .modebar-btn:hover path {
+        fill: var(--dst-text) !important;
+    }
+    [data-testid="stAlert"] {
+        border-radius: 10px;
+        border-width: 1px;
+    }
+
+    /* Financial metric cards */
+    [data-testid="stMetric"] {
+        min-height: 112px;
+        padding: 1rem 1.1rem;
+        border: 1px solid var(--dst-border);
+        border-radius: var(--dst-radius);
+        background: var(--dst-surface);
+    }
+    [data-testid="stMetricLabel"] {
+        color: var(--dst-muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.025em;
+    }
+    [data-testid="stMetricValue"] {
+        color: var(--dst-text);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.025em;
+    }
+
+    /* Inputs */
+    [data-baseweb="select"] > div,
+    [data-baseweb="input"] > div,
+    [data-testid="stDateInput"] [data-baseweb="input"] > div {
+        border-color: var(--dst-border) !important;
+        border-radius: 9px !important;
+        background: var(--dst-surface-raised) !important;
+    }
+    [data-baseweb="select"] > div:focus-within,
+    [data-baseweb="input"] > div:focus-within {
+        border-color: var(--dst-brand) !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.28) !important;
+    }
+
+    /* Stable button semantics: primary, neutral secondary, destructive tertiary. */
+    button[kind^="primary"] {
+        background-color: var(--dst-brand) !important;
+        color: white !important;
+        border: 1px solid var(--dst-brand) !important;
+        border-radius: 9px !important;
+        font-weight: 650 !important;
+        min-height: 2.65rem;
+    }
+    button[kind^="primary"]:hover {
+        background-color: var(--dst-brand-hover) !important;
+        border-color: var(--dst-brand-hover) !important;
+    }
+    button[kind^="secondary"] {
+        background-color: var(--dst-surface-raised) !important;
+        color: var(--dst-text) !important;
+        border: 1px solid var(--dst-border) !important;
+        border-radius: 9px !important;
+        font-weight: 600 !important;
+        min-height: 2.65rem;
+    }
+    button[kind^="secondary"]:hover {
+        border-color: var(--dst-brand) !important;
+        color: white !important;
+    }
+    button[kind^="tertiary"] {
+        background-color: rgba(248, 113, 113, 0.12) !important;
+        color: #fecaca !important;
+        border: 1px solid rgba(248, 113, 113, 0.55) !important;
+        border-radius: 9px !important;
+        font-weight: 650 !important;
+        min-height: 2.65rem;
+    }
+    button[kind^="tertiary"]:hover {
+        background-color: rgba(248, 113, 113, 0.22) !important;
+        border-color: var(--dst-negative) !important;
+    }
+    button:focus-visible {
+        outline: 3px solid rgba(129, 140, 248, 0.72) !important;
+        outline-offset: 2px !important;
     }
 
     /* Numeric values are entered directly; hide increment/decrement steppers. */
     div[data-testid="stNumberInput"] button {
         display: none !important;
+    }
+
+    @media (max-width: 1150px) and (min-width: 641px) {
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {
+            flex-wrap: wrap;
+        }
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"])
+        > [data-testid="stColumn"] {
+            flex: 1 1 calc(50% - 0.5rem) !important;
+            min-width: 240px !important;
+        }
+    }
+
+    @media (max-width: 640px) {
+        [data-testid="stAppViewContainer"] > .main .block-container {
+            width: 100%;
+            max-width: 100%;
+            padding: 1.25rem 1rem 3rem;
+        }
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            min-width: 0 !important;
+        }
+        [data-testid="stMetric"] {
+            min-height: 96px;
+        }
+        [data-testid="stDataFrame"],
+        [data-testid="stPlotlyChart"] {
+            max-width: 100%;
+        }
+        h1 {
+            font-size: 1.75rem !important;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+            animation-duration: 0.01ms !important;
+        }
     }
 </style>
 """

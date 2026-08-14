@@ -23,12 +23,20 @@ from utils.ui_helpers import (
 
 
 def test_preview_and_process_button_styles_are_defined():
-    """Preview is green/bold and Process Trade is red in the shared CSS."""
-    assert "button[kind=\"secondary\"]" in BUTTON_STYLES_CSS
-    assert "background-color: #28a745" in BUTTON_STYLES_CSS
-    assert "font-weight: bold" in BUTTON_STYLES_CSS
-    assert "button[kind=\"primary\"]" in BUTTON_STYLES_CSS
-    assert "background-color: #dc3545" in BUTTON_STYLES_CSS
+    """Buttons use semantic styles without relying on column position."""
+    assert "button[kind^=\"secondary\"]" in BUTTON_STYLES_CSS
+    assert "button[kind^=\"primary\"]" in BUTTON_STYLES_CSS
+    assert "button[kind^=\"tertiary\"]" in BUTTON_STYLES_CSS
+    assert ":first-child" not in BUTTON_STYLES_CSS
+    assert ":last-child" not in BUTTON_STYLES_CSS
+
+
+def test_responsive_and_accessible_styles_are_defined():
+    assert "@media (max-width: 1150px)" in BUTTON_STYLES_CSS
+    assert "@media (max-width: 640px)" in BUTTON_STYLES_CSS
+    assert "flex-wrap: wrap" in BUTTON_STYLES_CSS
+    assert "button:focus-visible" in BUTTON_STYLES_CSS
+    assert "prefers-reduced-motion: reduce" in BUTTON_STYLES_CSS
 
 
 def test_number_input_stepper_buttons_are_hidden():
