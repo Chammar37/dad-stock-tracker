@@ -707,11 +707,12 @@ elif page == "Trade Entry":
                         with col_a:
                             st.metric("Total Cost of Trade", format_currency(preview['cost_of_trade']))
                         with col_b:
-                            st.metric("New Total Shares", f"{preview['new_quantity']:,}")
+                            st.metric("Traded Shares", format_number(preview['traded_shares']))
                         with col_c:
                             st.metric("New Avg Price/Share", format_currency(preview['new_avg_price']))
                         with col_d:
                             st.metric("New Book Value", format_currency(preview['new_book_value']))
+                        st.caption(f"Total shares after trade: {format_number(preview['new_quantity'])}")
                     except Exception as e:
                         st.error(f"Error calculating preview: {str(e)}")
 
@@ -737,10 +738,10 @@ elif page == "Trade Entry":
                         with col_b:
                             st.metric("Net Proceeds", format_currency(preview['net_proceeds']))
                         with col_c:
-                            st.metric("Cost", format_currency(preview['cost_basis']))
+                            st.metric("Traded Shares", format_number(preview['traded_shares']))
                         with col_d:
                             st.metric("Trade Gain/Loss", format_currency(preview['trade_gain_loss']))
-                        st.caption(f"Remaining quantity: {preview['new_quantity']} | Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
+                        st.caption(f"Cost basis: {format_currency(preview['cost_basis'])} | Remaining quantity: {format_number(preview['new_quantity'])} | Total Gain/Loss after trade: {format_currency(preview['new_total_gain_loss'])}")
 
         if submitted:
             # shares_traded already has the correct value from the widget
@@ -1016,7 +1017,7 @@ elif page == "Trade History":
                 stored_gross = row.get('GrossProceeds')
                 if pd.notna(stored_gross):
                     return float(stored_gross)
-                if row['TradeType'] == 'S':
+                if row['TradeType'] in ['B', 'S']:
                     return int(row['SharesTraded']) * float(row['PricePerShare'])
                 return None
 
@@ -1024,6 +1025,8 @@ elif page == "Trade History":
                 stored_net = row.get('NetProceeds')
                 if pd.notna(stored_net):
                     return float(stored_net)
+                if row['TradeType'] == 'B':
+                    return calculate_gross_proceeds(row) + float(row['Commission'])
                 if row['TradeType'] == 'S':
                     return calculate_gross_proceeds(row) - float(row['Commission'])
                 return None
@@ -1051,7 +1054,7 @@ elif page == "Trade History":
                 'Account': 'Account',
                 'StockName': 'Stock Name',
                 'StockSymbol': 'Symbol',
-                'DateOfTrade': 'Date',
+                'DateOfTrade': 'Trade Date',
                 'TradeType': 'Type',
                 'SharesTraded': 'Shares',
                 'PricePerShare': 'Price/Share',
@@ -1065,7 +1068,7 @@ elif page == "Trade History":
             # Format trade type
             display_df['Type'] = display_df['Type'].map({'B': 'Buy', 'S': 'Sell', 'T': 'Transfer'})
             display_df = display_df[[
-                'Account', 'Stock Name', 'Symbol', 'Date', 'Type', 'Shares',
+                'Account', 'Stock Name', 'Symbol', 'Trade Date', 'Type', 'Shares',
                 'Price/Share', 'Commission', 'Cost', 'Gross Proceeds',
                 'Net Proceeds', 'Gain/Loss'
             ]]

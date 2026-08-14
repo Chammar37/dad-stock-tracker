@@ -81,7 +81,9 @@ class TradeCalculator:
         capital_gain_loss = None
 
         if trade_type == 'B':
-            cost = (shares_traded * price_per_share) + commission
+            gross_proceeds = shares_traded * price_per_share
+            net_proceeds = gross_proceeds + commission
+            cost = net_proceeds
         elif trade_type == 'S':
             record = self.data_manager.get_consolidated_record(
                 enriched['Account'], enriched['StockSymbol']
@@ -417,7 +419,7 @@ class TradeCalculator:
         Calculate preview values for a buy trade without persisting.
 
         Returns:
-            Dict with keys: cost_of_trade, new_quantity, new_avg_price, new_book_value
+            Dict with keys: traded_shares, cost_of_trade, new_quantity, new_avg_price, new_book_value
         """
         try:
             # Calculate cost of this trade
@@ -441,6 +443,7 @@ class TradeCalculator:
                 new_book_value = cost_of_trade
 
             return {
+                'traded_shares': shares_traded,
                 'cost_of_trade': cost_of_trade,
                 'new_quantity': new_quantity,
                 'new_avg_price': new_avg_price,
@@ -456,7 +459,7 @@ class TradeCalculator:
 
         Returns:
             Tuple of (success, preview_dict, error_message)
-            preview_dict has keys: net_proceeds, trade_gain_loss, new_quantity, new_total_gain_loss
+            preview_dict has keys: traded_shares, net_proceeds, trade_gain_loss, new_quantity, new_total_gain_loss
         """
         try:
             # Fetch existing holding
@@ -482,6 +485,7 @@ class TradeCalculator:
             cost_basis = shares_traded * current_avg_price
 
             return True, {
+                'traded_shares': shares_traded,
                 'gross_proceeds': gross_proceeds,
                 'net_proceeds': net_proceeds,
                 'cost_basis': cost_basis,

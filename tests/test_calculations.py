@@ -367,7 +367,8 @@ class TestTradeProcessing:
         buy_row = trades.iloc[0]
         sell_row = trades.iloc[1]
         assert abs(buy_row['Cost'] - 15009.99) < 0.01
-        assert pd.isna(buy_row['GrossProceeds'])
+        assert abs(buy_row['GrossProceeds'] - 15000.00) < 0.01
+        assert abs(buy_row['NetProceeds'] - 15009.99) < 0.01
         assert abs(sell_row['GrossProceeds'] - 4375.00) < 0.01
         assert abs(sell_row['NetProceeds'] - 4365.01) < 0.01
         assert abs(sell_row['AverageCostAtSale'] - 150.0999) < 0.01
